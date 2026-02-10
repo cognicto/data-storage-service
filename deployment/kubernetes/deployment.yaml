@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sensor-storage-service
+  namespace: sensor-storage
+  labels:
+    app: sensor-storage-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sensor-storage-service
+  template:
+    metadata:
+      labels:
+        app: sensor-storage-service
+    spec:
+      containers:
+      - name: sensor-storage-service
+        image: sensor-storage-service:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        envFrom:
+        - configMapRef:
+            name: sensor-storage-config
+        - secretRef:
+            name: sensor-storage-secrets
+        
+        volumeMounts:
+        - name: data-storage
+          mountPath: /data
+        
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 2
+      
+      volumes:
+      - name: data-storage
+        persistentVolumeClaim:
+          claimName: sensor-storage-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sensor-storage-service
+  namespace: sensor-storage
+  labels:
+    app: sensor-storage-service
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: sensor-storage-service
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sensor-storage-pvc
+  namespace: sensor-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: standard
