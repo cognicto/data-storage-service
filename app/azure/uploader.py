@@ -29,10 +29,20 @@ class AzureBlobUploader:
             logger.warning("Azure credentials not configured - uploads will be disabled")
             self.blob_service_client = None
         else:
-            self.blob_service_client = BlobServiceClient(
-                account_url=f"https://{config.storage_account}.blob.core.windows.net",
-                credential=config.storage_key
-            )
+            # Check if using SAS token (starts with 'sv=')
+            if config.storage_key and config.storage_key.startswith('sv='):
+                # Using SAS token
+                logger.info("Connecting to Azure using SAS token")
+                self.blob_service_client = BlobServiceClient(
+                    account_url=f"https://{config.storage_account}.blob.core.windows.net?{config.storage_key}"
+                )
+            else:
+                # Using storage key
+                logger.info("Connecting to Azure using storage key")
+                self.blob_service_client = BlobServiceClient(
+                    account_url=f"https://{config.storage_account}.blob.core.windows.net",
+                    credential=config.storage_key
+                )
             self._ensure_container_exists()
         
         # Metrics
@@ -53,11 +63,17 @@ class AzureBlobUploader:
         try:
             container_client = self.blob_service_client.get_container_client(self.config.container_name)
             if not container_client.exists():
-                container_client.create_container()
-                logger.info(f"Created Azure container: {self.config.container_name}")
+                # Note: Creating container might fail with SAS token if it doesn't have create permission
+                try:
+                    container_client.create_container()
+                    logger.info(f"Created Azure container: {self.config.container_name}")
+                except Exception as e:
+                    logger.warning(f"Could not create container (might already exist or insufficient permissions): {e}")
+            else:
+                logger.info(f"Azure container exists: {self.config.container_name}")
         except AzureError as e:
-            logger.error(f"Failed to create/check container: {e}")
-            raise
+            logger.warning(f"Could not verify container existence: {e}")
+            # Continue anyway as container might exist but SAS token might not have list permission
     
     def get_blob_path(self, local_file: Path) -> str:
         """Convert local file path to blob path maintaining hierarchy."""
@@ -150,6 +166,8 @@ class AzureBlobUploader:
                         self.upload_stats['total_bytes'] += local_file.stat().st_size
                         self.upload_stats['last_upload_time'] = datetime.utcnow()
                         
+                        logger.info(f"Successfully uploaded: {blob_path} ({file_size_mb:.2f} MB)")
+                        
                         return {
                             'local_file': str(local_file),
                             'blob_path': blob_path,
@@ -167,6 +185,7 @@ class AzureBlobUploader:
             
             # All retries failed
             self.upload_stats['failed_uploads'] += 1
+            logger.error(f"Failed to upload {blob_path} after {self.config.max_retries} attempts: {last_error}")
             return {
                 'local_file': str(local_file),
                 'blob_path': blob_path,
@@ -178,6 +197,7 @@ class AzureBlobUploader:
             
         except Exception as e:
             self.upload_stats['failed_uploads'] += 1
+            logger.error(f"Unexpected error uploading {local_file}: {e}")
             return {
                 'local_file': str(local_file),
                 'blob_path': blob_path,
@@ -222,16 +242,23 @@ class AzureBlobUploader:
                 try:
                     result = future.result()
                     status = result['status']
-                    results[status].append(result)
+                    
+                    # Add to appropriate result category
+                    if status == 'uploaded':
+                        results['uploaded'].append(result)
+                    elif status == 'skipped':
+                        results['skipped'].append(result)
+                    else:
+                        results['failed'].append(result)
                     
                     completed += 1
                     if completed % 10 == 0 or completed == total_files:
                         logger.info(f"Upload progress: {completed}/{total_files} files processed")
                         
                     if status == 'uploaded':
-                        logger.info(f"Uploaded: {result['blob_path']} ({result['size_mb']:.2f} MB)")
+                        logger.debug(f"Uploaded: {result['blob_path']} ({result['size_mb']:.2f} MB)")
                     elif status == 'failed':
-                        logger.error(f"Failed to upload {result['local_file']}: {result['error']}")
+                        logger.error(f"Failed to upload {result['local_file']}: {result.get('error', 'Unknown error')}")
                         
                 except Exception as e:
                     logger.error(f"Unexpected error processing upload result: {e}")
@@ -239,6 +266,8 @@ class AzureBlobUploader:
         
         # Update total stats
         self.upload_stats['total_uploads'] += total_files
+        
+        logger.info(f"Upload complete - Uploaded: {len(results['uploaded'])}, Skipped: {len(results['skipped'])}, Failed: {len(results['failed'])}")
         
         return results
     
@@ -291,7 +320,18 @@ class AzureBlobUploader:
             # Test connection
             try:
                 container_client = self.blob_service_client.get_container_client(self.config.container_name)
-                container_client.get_container_properties()
+                # Try to get properties - might fail with insufficient SAS permissions
+                try:
+                    container_client.get_container_properties()
+                    logger.info("Azure connection test successful")
+                except Exception as e:
+                    # Try a simpler operation - list a single blob
+                    try:
+                        next(container_client.list_blobs(results_per_page=1), None)
+                        logger.info("Azure connection test successful (limited permissions)")
+                    except Exception as e2:
+                        logger.warning(f"Azure connection test completed with warnings: {e2}")
+                        # Don't mark as unhealthy as upload might still work
             except Exception as e:
                 healthy = False
                 issues.append(f"Cannot connect to Azure: {e}")
