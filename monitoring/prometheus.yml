@@ -1,0 +1,52 @@
+# Prometheus Configuration for Sensor Data Storage Service
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'sensor-storage-monitor'
+    environment: 'production'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - 'alertmanager:9093'
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - "alerts.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Sensor Storage Service metrics
+  - job_name: 'sensor-storage-service'
+    static_configs:
+      - targets: ['sensor-storage-service:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # Kafka Exporter (if using)
+  - job_name: 'kafka'
+    static_configs:
+      - targets: ['kafka-exporter:9308']
+    scrape_interval: 30s
+
+  # Azure Metrics (via Azure Monitor Exporter)
+  - job_name: 'azure-storage'
+    static_configs:
+      - targets: ['azure-exporter:9276']
+    scrape_interval: 60s
+
+  # Node Exporter for host metrics
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 30s
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

@@ -1,0 +1,62 @@
+# Development Configuration for Sensor Data Storage Service
+# Inherits from default.yaml and overrides development-specific values
+
+service:
+  environment: development
+
+kafka:
+  bootstrap_servers: localhost:9092
+  auto_offset_reset: earliest  # Process all messages in dev
+  max_poll_records: 100  # Smaller batches for debugging
+
+azure:
+  enabled: false  # Typically disabled in development
+  max_workers: 2
+  concurrent_uploads: 5
+
+storage:
+  local_path: ./data/raw  # Use relative path in development
+  parquet:
+    compression: lz4  # Faster compression for development
+    max_rows_per_file: 10000  # Smaller files for testing
+  buffer:
+    max_size_mb: 10
+    max_age_seconds: 60  # Flush more frequently in dev
+
+cleanup:
+  enabled: true
+  age_days: 1  # Clean up quickly in development
+  check_interval_hours: 1
+  dry_run: true  # Safety in development
+
+aggregation:
+  enabled: true
+  minute:
+    interval_seconds: 30  # Faster aggregation for testing
+    buffer_size: 10
+
+monitoring:
+  metrics:
+    enabled: true
+  alerting:
+    enabled: false
+
+api:
+  debug: true
+  cors:
+    origins:
+      - "*"  # Allow all origins in development
+
+logging:
+  level: DEBUG
+  file:
+    path: ./logs/sensor-storage-service.log
+    max_size_mb: 50
+  console:
+    colorize: true
+
+performance:
+  upload_interval_seconds: 300  # 5 minutes
+  buffer_flush_interval_seconds: 60  # 1 minute
+  max_memory_usage_mb: 1024
+  worker_threads: 2

@@ -1,0 +1,127 @@
+# Default Configuration for Sensor Data Storage Service
+# This file contains default values that can be overridden by environment variables
+
+service:
+  name: sensor-data-storage-service
+  version: 1.0.0
+  environment: development
+
+kafka:
+  bootstrap_servers: localhost:9092
+  topic_pattern: "^sensor-data-.*"
+  consumer_group: sensor-storage-service
+  auto_offset_reset: latest
+  enable_auto_commit: false
+  session_timeout_ms: 30000
+  max_poll_interval_ms: 300000
+  max_poll_records: 500
+  retry_backoff_ms: 100
+  request_timeout_ms: 30000
+  metadata_max_age_ms: 300000
+
+azure:
+  enabled: false
+  storage_account: ""
+  container_name: sensor-data-cold-storage
+  max_retries: 3
+  retry_delay: 1
+  max_workers: 4
+  chunk_size: 1048576  # 1MB
+  upload_timeout: 300  # 5 minutes
+  concurrent_uploads: 10
+
+storage:
+  local_path: /data/raw
+  parquet:
+    compression: lz4
+    row_group_size: 50000
+    max_rows_per_file: 100000
+    use_dictionary: true
+    compression_level: null
+  buffer:
+    max_size_mb: 100
+    max_age_seconds: 300
+    flush_on_shutdown: true
+  hierarchy:
+    structure: "{asset_id}/{year}/{month}/{day}/{hour}/{sensor_name}.parquet"
+    date_format: "%Y/%m/%d/%H"
+
+cleanup:
+  enabled: true
+  age_days: 7
+  check_interval_hours: 6
+  dry_run: false
+  batch_size: 100
+  preserve_empty_dirs: false
+  min_file_age_hours: 24
+
+aggregation:
+  enabled: true
+  levels:
+    - minute
+    - hour
+    - daily
+  minute:
+    interval_seconds: 60
+    buffer_size: 60
+  hourly:
+    schedule_minute: 5  # Run at 5 minutes past each hour
+  daily:
+    schedule_hour: 1    # Run at 1 AM
+    schedule_minute: 5
+
+monitoring:
+  metrics:
+    enabled: true
+    port: 9090
+    path: /metrics
+  health_check:
+    enabled: true
+    interval_seconds: 30
+    timeout_seconds: 10
+  alerting:
+    enabled: false
+    webhook_url: ""
+
+api:
+  host: 0.0.0.0
+  port: 8080
+  debug: false
+  cors:
+    enabled: true
+    origins:
+      - "*"
+    methods:
+      - GET
+      - POST
+    headers:
+      - "*"
+  rate_limiting:
+    enabled: false
+    requests_per_minute: 100
+
+logging:
+  level: INFO
+  format: json
+  file:
+    enabled: true
+    path: /tmp/sensor-storage-service.log
+    max_size_mb: 100
+    backup_count: 5
+  console:
+    enabled: true
+    colorize: true
+
+performance:
+  upload_interval_seconds: 1800  # 30 minutes
+  buffer_flush_interval_seconds: 300  # 5 minutes
+  max_memory_usage_mb: 2048
+  worker_threads: 4
+  connection_pool_size: 10
+
+retry:
+  max_attempts: 3
+  initial_delay_seconds: 1
+  max_delay_seconds: 60
+  exponential_base: 2
+  jitter: true

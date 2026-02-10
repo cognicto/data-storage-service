@@ -5,6 +5,7 @@ FastAPI routes for the sensor data storage service.
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 from typing import Dict, Optional
+from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)

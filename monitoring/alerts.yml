@@ -1,0 +1,181 @@
+# Alert Rules for Sensor Data Storage Service
+
+groups:
+  - name: sensor_storage_alerts
+    interval: 30s
+    rules:
+      # Kafka Consumer Alerts
+      - alert: KafkaConsumerDown
+        expr: up{job="sensor-storage-service"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: kafka
+        annotations:
+          summary: "Kafka consumer is down"
+          description: "The sensor storage service has been down for more than 5 minutes."
+
+      - alert: KafkaConsumerLag
+        expr: kafka_consumer_lag > 10000
+        for: 10m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "High Kafka consumer lag"
+          description: "Kafka consumer lag is {{ $value }} messages, which is above threshold."
+
+      - alert: NoMessagesConsumed
+        expr: rate(messages_consumed_total[5m]) == 0
+        for: 15m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "No messages consumed"
+          description: "No messages have been consumed from Kafka in the last 15 minutes."
+
+      # Storage Alerts
+      - alert: HighDiskUsage
+        expr: (storage_used_bytes / storage_capacity_bytes) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "High disk usage"
+          description: "Disk usage is above 85% (current: {{ $value | humanizePercentage }})."
+
+      - alert: StorageWriteFailures
+        expr: rate(storage_write_failures_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          component: storage
+        annotations:
+          summary: "Storage write failures"
+          description: "Storage write failure rate is {{ $value }} per second."
+
+      - alert: BufferOverflow
+        expr: buffer_size_bytes > 500000000
+        for: 5m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "Buffer size too large"
+          description: "Buffer size is {{ $value | humanize }} which may indicate processing issues."
+
+      # Azure Upload Alerts
+      - alert: AzureUploadFailures
+        expr: rate(azure_upload_failures_total[10m]) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          component: azure
+        annotations:
+          summary: "High Azure upload failure rate"
+          description: "Azure upload failure rate is {{ $value }} per second."
+
+      - alert: AzureUploadBacklog
+        expr: files_pending_upload > 1000
+        for: 30m
+        labels:
+          severity: warning
+          component: azure
+        annotations:
+          summary: "Large upload backlog"
+          description: "{{ $value }} files are pending upload to Azure."
+
+      - alert: AzureConnectionError
+        expr: azure_connection_errors_total > 0
+        for: 5m
+        labels:
+          severity: critical
+          component: azure
+        annotations:
+          summary: "Azure connection errors"
+          description: "Unable to connect to Azure Blob Storage."
+
+      # Cleanup Service Alerts
+      - alert: CleanupServiceDown
+        expr: cleanup_service_running == 0
+        for: 1h
+        labels:
+          severity: warning
+          component: cleanup
+        annotations:
+          summary: "Cleanup service not running"
+          description: "The cleanup service has not run in the last hour."
+
+      - alert: CleanupFailures
+        expr: rate(cleanup_failures_total[1h]) > 0
+        for: 1h
+        labels:
+          severity: warning
+          component: cleanup
+        annotations:
+          summary: "Cleanup failures detected"
+          description: "Cleanup service is experiencing failures."
+
+      # Aggregation Alerts
+      - alert: AggregationDelayed
+        expr: time() - aggregation_last_run_timestamp > 7200
+        for: 10m
+        labels:
+          severity: warning
+          component: aggregation
+        annotations:
+          summary: "Aggregation delayed"
+          description: "Aggregation has not run for {{ $value | humanizeDuration }}."
+
+      - alert: AggregationFailures
+        expr: rate(aggregation_failures_total[1h]) > 0
+        for: 30m
+        labels:
+          severity: warning
+          component: aggregation
+        annotations:
+          summary: "Aggregation failures"
+          description: "Aggregation is failing with {{ $value }} errors per second."
+
+      # Performance Alerts
+      - alert: HighMemoryUsage
+        expr: process_resident_memory_bytes > 2147483648
+        for: 10m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "High memory usage"
+          description: "Process memory usage is {{ $value | humanize }}."
+
+      - alert: HighCPUUsage
+        expr: rate(process_cpu_seconds_total[5m]) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value | humanizePercentage }}."
+
+      - alert: APIHighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "API high latency"
+          description: "95th percentile API latency is {{ $value }}s."
+
+      - alert: APIErrors
+        expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "High API error rate"
+          description: "API error rate is {{ $value }} per second."

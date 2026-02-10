@@ -1,0 +1,170 @@
+version: 1
+disable_existing_loggers: false
+
+formatters:
+  default:
+    format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    datefmt: '%Y-%m-%d %H:%M:%S'
+  
+  detailed:
+    format: '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(funcName)s() - %(message)s'
+    datefmt: '%Y-%m-%d %H:%M:%S'
+  
+  json:
+    (): pythonjsonlogger.jsonlogger.JsonFormatter
+    format: '%(asctime)s %(name)s %(levelname)s %(message)s %(pathname)s %(lineno)d %(funcName)s'
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: default
+    stream: ext://sys.stdout
+  
+  console_debug:
+    class: logging.StreamHandler
+    level: DEBUG
+    formatter: detailed
+    stream: ext://sys.stdout
+  
+  file:
+    class: logging.handlers.RotatingFileHandler
+    level: INFO
+    formatter: detailed
+    filename: /tmp/sensor-storage-service.log
+    maxBytes: 104857600  # 100MB
+    backupCount: 5
+    encoding: utf8
+  
+  error_file:
+    class: logging.handlers.RotatingFileHandler
+    level: ERROR
+    formatter: detailed
+    filename: /tmp/sensor-storage-service-error.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+    encoding: utf8
+  
+  json_file:
+    class: logging.handlers.RotatingFileHandler
+    level: INFO
+    formatter: json
+    filename: /tmp/sensor-storage-service.json
+    maxBytes: 104857600  # 100MB
+    backupCount: 3
+    encoding: utf8
+  
+  timed_file:
+    class: logging.handlers.TimedRotatingFileHandler
+    level: INFO
+    formatter: detailed
+    filename: /tmp/sensor-storage-service-daily.log
+    when: midnight
+    interval: 1
+    backupCount: 30
+    encoding: utf8
+
+loggers:
+  app:
+    level: INFO
+    handlers: [console, file, json_file]
+    propagate: false
+  
+  app.kafka:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+  
+  app.storage:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+  
+  app.azure:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+  
+  app.cleanup:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+  
+  app.aggregation:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+  
+  app.api:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+  
+  confluent:
+    level: WARNING
+    handlers: [console, file]
+    propagate: false
+  
+  azure:
+    level: WARNING
+    handlers: [console, file]
+    propagate: false
+  
+  urllib3:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+  
+  uvicorn:
+    level: INFO
+    handlers: [console]
+    propagate: false
+  
+  uvicorn.error:
+    level: ERROR
+    handlers: [console, error_file]
+    propagate: false
+  
+  uvicorn.access:
+    level: INFO
+    handlers: [console]
+    propagate: false
+
+root:
+  level: INFO
+  handlers: [console, file, error_file]
+
+# Development environment overrides
+development:
+  root:
+    level: DEBUG
+  loggers:
+    app:
+      level: DEBUG
+      handlers: [console_debug, file]
+    app.kafka:
+      level: DEBUG
+    app.storage:
+      level: DEBUG
+
+# Production environment overrides  
+production:
+  formatters:
+    default:
+      format: '%(asctime)s - %(levelname)s - %(message)s'
+  root:
+    level: WARNING
+  handlers:
+    console:
+      formatter: json
+    file:
+      formatter: json
+      filename: /var/log/sensor-storage/app.log
+    error_file:
+      filename: /var/log/sensor-storage/error.log
+  loggers:
+    app:
+      level: INFO
+      handlers: [json_file]
+    app.api:
+      level: WARNING

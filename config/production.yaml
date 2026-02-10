@@ -1,0 +1,76 @@
+# Production Configuration for Sensor Data Storage Service
+# Inherits from default.yaml and overrides production-specific values
+
+service:
+  environment: production
+
+kafka:
+  bootstrap_servers: ${KAFKA_BOOTSTRAP_SERVERS}
+  session_timeout_ms: 60000
+  max_poll_interval_ms: 600000
+  max_poll_records: 1000
+
+azure:
+  enabled: true
+  storage_account: ${AZURE_STORAGE_ACCOUNT}
+  storage_key: ${AZURE_STORAGE_KEY}
+  max_workers: 8
+  concurrent_uploads: 20
+
+storage:
+  local_path: /mnt/data/sensor-storage
+  parquet:
+    compression: snappy  # Better performance for production
+    max_rows_per_file: 500000
+  buffer:
+    max_size_mb: 500
+    max_age_seconds: 180
+
+cleanup:
+  enabled: true
+  age_days: 3  # More aggressive cleanup in production
+  check_interval_hours: 3
+  dry_run: false
+
+aggregation:
+  enabled: true
+  hourly:
+    schedule_minute: 2  # Run earlier to ensure completion
+  daily:
+    schedule_hour: 0    # Run at midnight
+    schedule_minute: 30
+
+monitoring:
+  metrics:
+    enabled: true
+  health_check:
+    interval_seconds: 10
+  alerting:
+    enabled: true
+    webhook_url: ${ALERT_WEBHOOK_URL}
+
+api:
+  debug: false
+  cors:
+    origins:
+      - "https://yourdomain.com"
+      - "https://api.yourdomain.com"
+  rate_limiting:
+    enabled: true
+    requests_per_minute: 1000
+
+logging:
+  level: WARNING
+  file:
+    path: /var/log/sensor-storage-service/app.log
+    max_size_mb: 500
+    backup_count: 10
+  console:
+    colorize: false
+
+performance:
+  upload_interval_seconds: 900  # 15 minutes - more frequent uploads
+  buffer_flush_interval_seconds: 180  # 3 minutes
+  max_memory_usage_mb: 8192
+  worker_threads: 8
+  connection_pool_size: 20
