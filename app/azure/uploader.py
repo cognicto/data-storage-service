@@ -4,12 +4,13 @@ Azure Blob Storage uploader with retry logic and parallel uploads.
 
 import logging
 import time
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from azure.storage.blob import BlobServiceClient, BlobClient
+from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
 from azure.core.exceptions import AzureError
 
 from app.config import AzureConfig
@@ -24,15 +25,43 @@ class AzureBlobUploader:
         """Initialize Azure uploader."""
         self.config = config
         self.local_storage_path = local_storage_path
+        self.container_client = None
+        self.blob_service_client = None
         
-        if not config.storage_account or not config.storage_key:
-            logger.warning("Azure credentials not configured - uploads will be disabled")
-            self.blob_service_client = None
-        else:
+        # Check if using new blob_endpoint + sas_token pattern
+        if config.blob_endpoint and config.sas_token:
+            # Extract storage account name from blob endpoint
+            match = re.search(r'https://([^.]+)\.blob\.core\.windows\.net', config.blob_endpoint)
+            if match:
+                self.storage_account_name = match.group(1)
+                logger.info(f"Extracted storage account: {self.storage_account_name}")
+            
+            # Clean up SAS token (remove leading ?)
+            sas_token = config.sas_token.lstrip('?')
+            
+            # Create container URL with SAS token
+            container_url = f"{config.blob_endpoint}/{config.container_name}?{sas_token}"
+            
+            try:
+                # Use ContainerClient directly with SAS token
+                self.container_client = ContainerClient.from_container_url(container_url)
+                logger.info(f"Connected to Azure container '{config.container_name}' using SAS token")
+                
+                # Also create BlobServiceClient for compatibility
+                self.blob_service_client = BlobServiceClient(
+                    account_url=f"{config.blob_endpoint}?{sas_token}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to connect to Azure: {e}")
+                self.container_client = None
+                self.blob_service_client = None
+                
+        # Fall back to old method using storage_account and storage_key
+        elif config.storage_account and config.storage_key:
             # Check if using SAS token (starts with 'sv=')
             if config.storage_key and config.storage_key.startswith('sv='):
                 # Using SAS token
-                logger.info("Connecting to Azure using SAS token")
+                logger.info("Connecting to Azure using SAS token (legacy method)")
                 self.blob_service_client = BlobServiceClient(
                     account_url=f"https://{config.storage_account}.blob.core.windows.net?{config.storage_key}"
                 )
@@ -43,7 +72,14 @@ class AzureBlobUploader:
                     account_url=f"https://{config.storage_account}.blob.core.windows.net",
                     credential=config.storage_key
                 )
-            self._ensure_container_exists()
+            
+            if self.blob_service_client:
+                self.container_client = self.blob_service_client.get_container_client(config.container_name)
+                self._ensure_container_exists()
+        else:
+            logger.warning("Azure credentials not configured - uploads will be disabled")
+            self.blob_service_client = None
+            self.container_client = None
         
         # Metrics
         self.upload_stats = {
@@ -124,7 +160,7 @@ class AzureBlobUploader:
     
     def upload_file(self, local_file: Path) -> Dict[str, any]:
         """Upload a single file to Azure Blob Storage with retry logic."""
-        if not self.blob_service_client:
+        if not self.blob_service_client and not self.container_client:
             return {
                 'local_file': str(local_file),
                 'blob_path': '',
@@ -148,10 +184,15 @@ class AzureBlobUploader:
                 }
             
             # Upload with retries
-            blob_client = self.blob_service_client.get_blob_client(
-                container=self.config.container_name, 
-                blob=blob_path
-            )
+            if self.container_client:
+                # Use container client if available (preferred for SAS token)
+                blob_client = self.container_client.get_blob_client(blob=blob_path)
+            else:
+                # Fall back to blob service client
+                blob_client = self.blob_service_client.get_blob_client(
+                    container=self.config.container_name, 
+                    blob=blob_path
+                )
             
             last_error = None
             for attempt in range(self.config.max_retries):

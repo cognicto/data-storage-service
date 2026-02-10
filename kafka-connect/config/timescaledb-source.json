@@ -1,0 +1,23 @@
+{
+  "name": "timescaledb-source-connector",
+  "config": {
+    "connector.class": "io.confluent.connect.jdbc.JdbcSourceConnector",
+    "connection.url": "jdbc:postgresql://your-timescaledb-host:5432/your_database",
+    "connection.user": "your_username",
+    "connection.password": "your_password",
+    "query": "SELECT * FROM sensor_data WHERE timestamp > ? ORDER BY timestamp",
+    "mode": "timestamp",
+    "timestamp.column.name": "timestamp",
+    "poll.interval.ms": "5000",
+    "topic.prefix": "sensor-data-",
+    "transforms": "createKey,extractField",
+    "transforms.createKey.type": "org.apache.kafka.connect.transforms.ValueToKey",
+    "transforms.createKey.fields": "sensor_id",
+    "transforms.extractField.type": "org.apache.kafka.connect.transforms.ExtractField$Key",
+    "transforms.extractField.field": "sensor_id",
+    "errors.tolerance": "all",
+    "errors.log.enable": "true",
+    "errors.log.include.messages": "true",
+    "tasks.max": "1"
+  }
+}

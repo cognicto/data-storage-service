@@ -45,24 +45,43 @@ class HierarchicalStorageManager:
     def extract_metadata(self, data: Dict) -> Dict[str, str]:
         """Extract metadata for file organization."""
         try:
-            # Get timestamp
-            timestamp_str = data.get('timestamp')
-            if timestamp_str:
-                timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            # Get timestamp from data.data.time (TimescaleDB format)
+            timestamp = None
+            if data.get('data') and data['data'].get('time'):
+                timestamp_str = data['data']['time']
+                # Parse various timestamp formats
+                try:
+                    timestamp = pd.to_datetime(timestamp_str, errors='coerce')
+                    if pd.isna(timestamp):
+                        timestamp = datetime.utcnow()
+                    else:
+                        timestamp = timestamp.to_pydatetime()
+                except:
+                    timestamp = datetime.utcnow()
             else:
-                timestamp = datetime.utcnow()
+                # Fallback to message timestamp
+                timestamp_str = data.get('timestamp')
+                if timestamp_str:
+                    timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                else:
+                    timestamp = datetime.utcnow()
             
-            # Extract asset_id from data (fallback to sensor_name if not available)
-            asset_id = data.get('data', {}).get('asset_id', 'default_asset')
-            if not asset_id or asset_id == '':
-                asset_id = f"asset_{data.get('sensor_name', 'unknown')}"
+            # Extract asset_id from daqid field (TimescaleDB structure)
+            asset_id = 'unknown_asset'
+            if data.get('data') and data['data'].get('daqid'):
+                asset_id = str(data['data']['daqid'])
             
-            # Extract sensor name
-            sensor_name = data.get('sensor_name', 'unknown_sensor')
+            # Extract table_name from topic (sensor-data-quad_ch1 -> quad_ch1)
+            topic = data.get('topic', '')
+            table_name = topic.replace('sensor-data-', '') if topic.startswith('sensor-data-') else 'unknown_table'
+            
+            # Get original sensor_name from the message
+            sensor_name = data.get('sensor_name', table_name)
             
             return {
                 'asset_id': asset_id,
-                'sensor_name': sensor_name,
+                'table_name': table_name,  # From topic name, used for file naming
+                'sensor_name': sensor_name,  # Original sensor name from message
                 'year': f"{timestamp.year:04d}",
                 'month': f"{timestamp.month:02d}",
                 'day': f"{timestamp.day:02d}",
@@ -86,7 +105,11 @@ class HierarchicalStorageManager:
     
     def get_file_path(self, metadata: Dict[str, str]) -> Path:
         """Generate hierarchical file path based on metadata."""
-        # Structure: asset_id/yyyy/mm/dd/hh/sensor_name.parquet
+        # Structure: asset_id/yyyy/mm/dd/hh/tablename_YYYYMMDD_HH.parquet
+        # Match the working code's naming convention
+        hour_str = f"{metadata['year']}{metadata['month']}{metadata['day']}_{metadata['hour']}"
+        filename = f"{metadata.get('table_name', metadata['sensor_name'])}_{hour_str}.parquet"
+        
         file_path = (
             self.local_path /
             metadata['asset_id'] /
@@ -94,13 +117,14 @@ class HierarchicalStorageManager:
             metadata['month'] /
             metadata['day'] /
             metadata['hour'] /
-            f"{metadata['sensor_name']}.parquet"
+            filename
         )
         return file_path
     
     def get_buffer_key(self, metadata: Dict[str, str]) -> str:
         """Generate buffer key for grouping messages."""
-        return f"{metadata['asset_id']}/{metadata['year']}/{metadata['month']}/{metadata['day']}/{metadata['hour']}/{metadata['sensor_name']}"
+        # Group by asset and table_name (from topic) to create separate files per sensor type
+        return f"{metadata['asset_id']}/{metadata['year']}/{metadata['month']}/{metadata['day']}/{metadata['hour']}/{metadata['table_name']}"
     
     def add_to_buffer(self, data: Dict) -> Optional[Path]:
         """Add data to buffer and return file path if buffer should be flushed."""
@@ -113,9 +137,13 @@ class HierarchicalStorageManager:
                 self._file_buffers[buffer_key] = []
                 self._buffer_timestamps[buffer_key] = datetime.utcnow()
             
-            # Flatten data structure for easier processing
+            # Flatten data structure for TimescaleDB format
+            # Keep the original sensor name from the message
+            original_sensor_name = data.get('sensor_name', 'unknown')
+            
             flattened_data = {
-                'sensor_name': metadata['sensor_name'],
+                'sensor_name': original_sensor_name,  # Preserve original sensor name
+                'table_name': metadata['table_name'],  # Table name from topic
                 'asset_id': metadata['asset_id'],
                 'timestamp': metadata['timestamp'],
                 'topic': data.get('topic'),
@@ -124,15 +152,25 @@ class HierarchicalStorageManager:
                 'kafka_timestamp': data.get('kafka_timestamp')
             }
             
-            # Add data fields
+            # Add data fields - expecting time, value, and daqid from TimescaleDB
             if isinstance(data.get('data'), dict):
-                for key, value in data['data'].items():
-                    # Flatten nested structures
-                    if isinstance(value, dict):
-                        for subkey, subvalue in value.items():
-                            flattened_data[f"{key}_{subkey}"] = subvalue
-                    else:
-                        flattened_data[key] = value
+                data_dict = data['data']
+                # Add TimescaleDB fields
+                if 'time' in data_dict:
+                    flattened_data['time'] = data_dict['time']
+                if 'value' in data_dict:
+                    flattened_data['value'] = data_dict['value']
+                if 'daqid' in data_dict:
+                    flattened_data['daqid'] = data_dict['daqid']
+                
+                # Add any other fields that might exist
+                for key, value in data_dict.items():
+                    if key not in ['time', 'value', 'daqid']:
+                        if isinstance(value, dict):
+                            for subkey, subvalue in value.items():
+                                flattened_data[f"{key}_{subkey}"] = subvalue
+                        else:
+                            flattened_data[key] = value
             else:
                 flattened_data['value'] = data.get('data')
             
@@ -170,8 +208,12 @@ class HierarchicalStorageManager:
             
             # Get file path from first record
             first_record = data_list[0]
+            # Extract table_name from buffer_key (last part)
+            table_name = buffer_key.split('/')[-1] if '/' in buffer_key else first_record.get('sensor_name', 'unknown')
+            
             metadata = {
                 'asset_id': first_record['asset_id'],
+                'table_name': table_name,  # Use table_name from buffer key
                 'sensor_name': first_record['sensor_name'],
                 'year': first_record['timestamp'][:4],
                 'month': first_record['timestamp'][5:7],

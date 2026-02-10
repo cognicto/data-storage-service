@@ -58,6 +58,40 @@ compose-logs: ## View logs
 test-kafka: ## Run Kafka test producer
 	python scripts/test-kafka-producer.py
 
+# Kafka Connect
+kafka-connect-status: ## Check Kafka Connect status
+	curl -s http://localhost:8083/ | jq
+
+kafka-connect-connectors: ## List Kafka Connect connectors
+	curl -s http://localhost:8083/connectors | jq
+
+kafka-connect-logs: ## View Kafka Connect logs
+	docker-compose logs -f kafka-connect
+
+# TimescaleDB Connector Management
+timescaledb-deploy: ## Deploy TimescaleDB source connector
+	curl -X POST http://localhost:8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @kafka-connect/config/timescaledb-source.json
+
+timescaledb-status: ## Check TimescaleDB connector status
+	curl -s http://localhost:8083/connectors/timescaledb-source-connector/status | jq
+
+timescaledb-restart: ## Restart TimescaleDB connector
+	curl -X POST http://localhost:8083/connectors/timescaledb-source-connector/restart
+
+timescaledb-pause: ## Pause TimescaleDB connector
+	curl -X PUT http://localhost:8083/connectors/timescaledb-source-connector/pause
+
+timescaledb-resume: ## Resume TimescaleDB connector
+	curl -X PUT http://localhost:8083/connectors/timescaledb-source-connector/resume
+
+timescaledb-delete: ## Delete TimescaleDB connector
+	curl -X DELETE http://localhost:8083/connectors/timescaledb-source-connector
+
+timescaledb-config: ## Show TimescaleDB connector config
+	curl -s http://localhost:8083/connectors/timescaledb-source-connector/config | jq
+
 # Cleanup
 clean: ## Clean up containers and images
 	docker-compose down -v

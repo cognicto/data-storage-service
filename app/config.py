@@ -24,9 +24,11 @@ class KafkaConfig:
 @dataclass
 class AzureConfig:
     """Azure Blob Storage configuration."""
-    storage_account: str
-    storage_key: str
+    blob_endpoint: str  # Full blob endpoint URL
+    sas_token: str  # SAS token (with or without leading ?)
     container_name: str
+    storage_account: str = ""  # Will be extracted from blob_endpoint
+    storage_key: str = ""  # Kept for backward compatibility
     max_retries: int = 3
     retry_delay: int = 1
     max_workers: int = 4
@@ -88,9 +90,11 @@ def load_config() -> AppConfig:
     
     # Azure configuration
     azure_config = AzureConfig(
-        storage_account=os.getenv("AZURE_STORAGE_ACCOUNT", ""),
-        storage_key=os.getenv("AZURE_STORAGE_KEY", ""),
+        blob_endpoint=os.getenv("AZURE_BLOB_ENDPOINT", ""),
+        sas_token=os.getenv("AZURE_SAS_TOKEN", ""),
         container_name=os.getenv("AZURE_CONTAINER_NAME", "sensor-data-cold-storage"),
+        storage_account=os.getenv("AZURE_STORAGE_ACCOUNT", ""),  # For backward compatibility
+        storage_key=os.getenv("AZURE_STORAGE_KEY", ""),  # For backward compatibility
         max_retries=int(os.getenv("AZURE_MAX_RETRIES", "3")),
         retry_delay=int(os.getenv("AZURE_RETRY_DELAY", "1")),
         max_workers=int(os.getenv("AZURE_MAX_WORKERS", "4")),
@@ -98,8 +102,16 @@ def load_config() -> AppConfig:
     )
     
     # Storage configuration
+    # Handle Windows paths correctly
+    storage_path_str = os.getenv("LOCAL_STORAGE_PATH", "/data/raw")
+    # Convert Windows path format if needed
+    if storage_path_str.startswith("C:") or storage_path_str.startswith("c:"):
+        storage_path = Path(storage_path_str.replace("/", "\\"))
+    else:
+        storage_path = Path(storage_path_str)
+    
     storage_config = StorageConfig(
-        local_path=Path(os.getenv("LOCAL_STORAGE_PATH", "/data/raw")),
+        local_path=storage_path,
         parquet_compression=os.getenv("PARQUET_COMPRESSION", "lz4"),
         partition_cols=os.getenv("PARQUET_PARTITION_COLS", "").split(",") if os.getenv("PARQUET_PARTITION_COLS") else [],
         max_rows_per_file=int(os.getenv("MAX_ROWS_PER_FILE", "100000"))
