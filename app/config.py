@@ -154,9 +154,15 @@ def validate_config(config: AppConfig) -> bool:
     if not config.kafka.topic_pattern:
         errors.append("KAFKA_TOPIC_PATTERN is required")
     
-    # Validate Azure config (only if not disabled)
-    if config.azure.storage_account and not config.azure.storage_key:
-        errors.append("AZURE_STORAGE_KEY is required when AZURE_STORAGE_ACCOUNT is set")
+    # Validate Azure config - support both authentication methods
+    has_storage_account_auth = config.azure.storage_account and config.azure.storage_key
+    has_sas_token_auth = config.azure.blob_endpoint and config.azure.sas_token
+    
+    # If any Azure config is provided, ensure it's complete
+    if (config.azure.storage_account or config.azure.storage_key or 
+        config.azure.blob_endpoint or config.azure.sas_token):
+        if not has_storage_account_auth and not has_sas_token_auth:
+            errors.append("Azure authentication requires either (AZURE_STORAGE_ACCOUNT + AZURE_STORAGE_KEY) or (AZURE_BLOB_ENDPOINT + AZURE_SAS_TOKEN)")
     
     # Validate storage path
     if not config.storage.local_path:

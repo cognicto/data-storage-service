@@ -12,6 +12,9 @@ import uvicorn
 from datetime import datetime
 from pathlib import Path
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from app.config import load_config, validate_config
 from app.kafka.consumer import SensorDataConsumer
 from app.storage.manager import HierarchicalStorageManager
