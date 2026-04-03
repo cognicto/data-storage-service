@@ -4,6 +4,7 @@ Main application entry point for the sensor data storage service.
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 import threading
@@ -144,8 +145,8 @@ class SensorDataStorageService:
         def upload_worker():
             while self.running:
                 try:
-                    # Wait for upload interval (default: every 30 minutes)
-                    upload_interval = 1800  # 30 minutes
+                    # Wait for upload interval (configurable via env var, default: every 30 minutes)
+                    upload_interval = int(os.getenv("UPLOAD_INTERVAL_SECONDS", "1800"))  # 30 minutes default
                     
                     # Sleep in small intervals to allow quick shutdown
                     for _ in range(upload_interval):
