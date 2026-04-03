@@ -164,7 +164,14 @@ class SensorDataStorageService:
                     # Get all local files and upload them
                     local_files = self.storage_manager.get_local_files()
                     if local_files:
-                        logger.info(f"Starting scheduled upload of {len(local_files)} files")
+                        # Categorize files for better logging
+                        raw_files = [f for f in local_files if '/aggregated/' not in str(f)]
+                        aggregated_files = [f for f in local_files if '/aggregated/' in str(f)]
+                        
+                        logger.info(f"Starting scheduled upload of {len(local_files)} files:")
+                        logger.info(f"  - Raw data files: {len(raw_files)}")
+                        logger.info(f"  - Aggregated files: {len(aggregated_files)}")
+                        
                         results = self.azure_uploader.upload_files_parallel(local_files)
                         
                         # Mark uploaded files for cleanup

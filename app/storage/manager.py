@@ -305,6 +305,22 @@ class HierarchicalStorageManager:
                 files.append(file_path)
         return sorted(files)
     
+    def get_aggregated_files(self, pattern: str = "*.parquet") -> List[Path]:
+        """Get all aggregated Parquet files."""
+        files = []
+        aggregated_path = self.local_path / "aggregated"
+        if aggregated_path.exists():
+            for file_path in aggregated_path.rglob(pattern):
+                if file_path.is_file():
+                    files.append(file_path)
+        return sorted(files)
+    
+    def get_raw_data_files(self, pattern: str = "*.parquet") -> List[Path]:
+        """Get all raw data Parquet files (excludes aggregated)."""
+        all_files = self.get_local_files(pattern)
+        aggregated_files = self.get_aggregated_files(pattern)
+        return [f for f in all_files if f not in aggregated_files]
+    
     def get_storage_stats(self) -> Dict:
         """Get storage statistics."""
         files = self.get_local_files()
