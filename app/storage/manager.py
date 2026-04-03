@@ -45,26 +45,55 @@ class HierarchicalStorageManager:
     def extract_metadata(self, data: Dict) -> Dict[str, str]:
         """Extract metadata for file organization."""
         try:
-            # Get timestamp from data.data.time (TimescaleDB format)
+            # Get timestamp - try multiple sources in order of preference
             timestamp = None
+            
+            # 1. Try data.time field (TimescaleDB format)
             if data.get('data') and data['data'].get('time'):
                 timestamp_str = data['data']['time']
-                # Parse various timestamp formats
                 try:
-                    timestamp = pd.to_datetime(timestamp_str, errors='coerce')
-                    if pd.isna(timestamp):
-                        timestamp = datetime.utcnow()
+                    # Handle Unix timestamps (both seconds and milliseconds)
+                    if isinstance(timestamp_str, (int, float)):
+                        # If number > 1e10, it's likely milliseconds, otherwise seconds
+                        if timestamp_str > 1e10:
+                            timestamp = datetime.fromtimestamp(timestamp_str / 1000)
+                        else:
+                            timestamp = datetime.fromtimestamp(timestamp_str)
                     else:
-                        timestamp = timestamp.to_pydatetime()
+                        # Try parsing as string timestamp
+                        timestamp = pd.to_datetime(timestamp_str, errors='coerce')
+                        if pd.isna(timestamp):
+                            timestamp = None
+                        else:
+                            timestamp = timestamp.to_pydatetime()
                 except:
-                    timestamp = datetime.utcnow()
-            else:
-                # Fallback to message timestamp
-                timestamp_str = data.get('timestamp')
-                if timestamp_str:
+                    timestamp = None
+            
+            # 2. Try kafka_timestamp (Unix timestamp in milliseconds)
+            if timestamp is None and data.get('kafka_timestamp'):
+                try:
+                    kafka_ts = data['kafka_timestamp']
+                    if isinstance(kafka_ts, (int, float)):
+                        # Kafka timestamps are typically in milliseconds
+                        timestamp = datetime.fromtimestamp(kafka_ts / 1000)
+                except:
+                    timestamp = None
+            
+            # 3. Try message timestamp (ISO format)
+            if timestamp is None and data.get('timestamp'):
+                try:
+                    timestamp_str = data['timestamp']
                     timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                else:
-                    timestamp = datetime.utcnow()
+                except:
+                    timestamp = None
+            
+            # 4. Fallback to current time
+            if timestamp is None:
+                timestamp = datetime.utcnow()
+                logger.warning(f"No valid timestamp found in data, using current time: {timestamp}")
+            
+            # Log the extracted timestamp for debugging
+            logger.debug(f"Extracted timestamp: {timestamp} from data: {data.get('data', {}).get('time', 'N/A')}, kafka_timestamp: {data.get('kafka_timestamp', 'N/A')}")
             
             # Extract asset_id from daqid field (TimescaleDB structure)
             asset_id = 'unknown_asset'
