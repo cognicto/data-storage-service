@@ -147,7 +147,8 @@ def verify_parquet(file_path, show_sample=False, sample_size=5):
             print("-" * 80)
             pd.set_option('display.max_columns', None)
             pd.set_option('display.width', None)
-            print(df.head(sample_size).to_string())
+            # Hide the DataFrame index (0, 1, 2, ...) for cleaner output
+            print(df.head(sample_size).to_string(index=False))
             pd.reset_option('display.max_columns')
             pd.reset_option('display.width')
         

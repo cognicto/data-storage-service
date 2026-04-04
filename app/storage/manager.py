@@ -115,7 +115,7 @@ class HierarchicalStorageManager:
                 'month': f"{timestamp.month:02d}",
                 'day': f"{timestamp.day:02d}",
                 'hour': f"{timestamp.hour:02d}",
-                'timestamp': timestamp.isoformat()
+                'timestamp': timestamp.isoformat() + 'Z' if not timestamp.isoformat().endswith(('Z', '+00:00')) else timestamp.isoformat()
             }
             
         except Exception as e:
@@ -430,8 +430,21 @@ class HierarchicalStorageManager:
             
             if agg_path.exists():
                 existing_df = pd.read_parquet(agg_path)
-                combined_df = pd.concat([existing_df, aggregated], ignore_index=True)
-                combined_df.to_parquet(agg_path, compression=self.compression, index=False)
+                # Avoid duplicate minute buckets by checking existing data
+                existing_buckets = set(existing_df['minute_bucket'].tolist())
+                new_buckets = set(aggregated['minute_bucket'].tolist())
+                
+                # Only append records with new minute buckets
+                new_records = aggregated[~aggregated['minute_bucket'].isin(existing_buckets)]
+                
+                if len(new_records) > 0:
+                    combined_df = pd.concat([existing_df, new_records], ignore_index=True)
+                    # Sort by minute_bucket to maintain order
+                    combined_df = combined_df.sort_values('minute_bucket').reset_index(drop=True)
+                    combined_df.to_parquet(agg_path, compression=self.compression, index=False)
+                    logger.info(f"Added {len(new_records)} new minute aggregations to {agg_path}")
+                else:
+                    logger.debug(f"No new minute buckets to add to {agg_path}")
             else:
                 aggregated.to_parquet(agg_path, compression=self.compression, index=False)
             
