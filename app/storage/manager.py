@@ -166,42 +166,34 @@ class HierarchicalStorageManager:
                 self._file_buffers[buffer_key] = []
                 self._buffer_timestamps[buffer_key] = datetime.utcnow()
             
-            # Flatten data structure for TimescaleDB format
-            # Keep the original sensor name from the message
-            original_sensor_name = data.get('sensor_name', 'unknown')
+            # Simplified data structure - only store essential fields
+            # Asset ID is encoded in folder structure, no need to store in each record
             
             flattened_data = {
-                'sensor_name': original_sensor_name,  # Preserve original sensor name
-                'table_name': metadata['table_name'],  # Table name from topic
-                'asset_id': metadata['asset_id'],
-                'timestamp': metadata['timestamp'],
-                'topic': data.get('topic'),
-                'partition': data.get('partition'),
-                'offset': data.get('offset'),
-                'kafka_timestamp': data.get('kafka_timestamp')
+                'timestamp': metadata['timestamp'],  # Parsed timestamp
+                'value': None  # Will be set below
             }
             
-            # Add data fields - expecting time, value, and daqid from TimescaleDB
+            # Extract value from TimescaleDB data structure
             if isinstance(data.get('data'), dict):
                 data_dict = data['data']
-                # Add TimescaleDB fields
-                if 'time' in data_dict:
-                    flattened_data['time'] = data_dict['time']
                 if 'value' in data_dict:
                     flattened_data['value'] = data_dict['value']
-                if 'daqid' in data_dict:
-                    flattened_data['daqid'] = data_dict['daqid']
-                
-                # Add any other fields that might exist
-                for key, value in data_dict.items():
-                    if key not in ['time', 'value', 'daqid']:
-                        if isinstance(value, dict):
-                            for subkey, subvalue in value.items():
-                                flattened_data[f"{key}_{subkey}"] = subvalue
-                        else:
-                            flattened_data[key] = value
+                else:
+                    # If no 'value' field, try to find numeric data
+                    numeric_fields = {k: v for k, v in data_dict.items() 
+                                    if isinstance(v, (int, float)) and k not in ['time', 'daqid']}
+                    if numeric_fields:
+                        # Use the first numeric field as value
+                        flattened_data['value'] = list(numeric_fields.values())[0]
             else:
+                # Direct value in 'data' field
                 flattened_data['value'] = data.get('data')
+            
+            # Skip records with no valid value
+            if flattened_data['value'] is None:
+                logger.warning(f"Skipping record with no valid value: {data}")
+                return None
             
             self._file_buffers[buffer_key].append(flattened_data)
             
@@ -235,20 +227,31 @@ class HierarchicalStorageManager:
             # Create DataFrame
             df = pd.DataFrame(data_list)
             
-            # Get file path from first record
-            first_record = data_list[0]
-            # Extract table_name from buffer_key (last part)
-            table_name = buffer_key.split('/')[-1] if '/' in buffer_key else first_record.get('sensor_name', 'unknown')
-            
-            metadata = {
-                'asset_id': first_record['asset_id'],
-                'table_name': table_name,  # Use table_name from buffer key
-                'sensor_name': first_record['sensor_name'],
-                'year': first_record['timestamp'][:4],
-                'month': first_record['timestamp'][5:7],
-                'day': first_record['timestamp'][8:10],
-                'hour': first_record['timestamp'][11:13]
-            }
+            # Extract metadata from buffer_key since records are now minimal
+            # buffer_key format: asset_id/yyyy/mm/dd/hh/table_name
+            buffer_parts = buffer_key.split('/')
+            if len(buffer_parts) >= 6:
+                metadata = {
+                    'asset_id': buffer_parts[0],
+                    'year': buffer_parts[1],
+                    'month': buffer_parts[2],
+                    'day': buffer_parts[3],
+                    'hour': buffer_parts[4],
+                    'table_name': buffer_parts[5],
+                    'sensor_name': buffer_parts[5]  # Use table_name as sensor_name
+                }
+            else:
+                # Fallback - extract from first record timestamp
+                first_record = data_list[0]
+                metadata = {
+                    'asset_id': 'unknown_asset',
+                    'table_name': 'unknown_sensor',
+                    'sensor_name': 'unknown_sensor',
+                    'year': first_record['timestamp'][:4],
+                    'month': first_record['timestamp'][5:7],
+                    'day': first_record['timestamp'][8:10],
+                    'hour': first_record['timestamp'][11:13]
+                }
             
             file_path = self.get_file_path(metadata)
             
