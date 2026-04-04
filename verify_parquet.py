@@ -41,27 +41,58 @@ def verify_parquet(file_path, show_sample=False, sample_size=5):
         print("\n" + "=" * 60)
         
         # Time analysis
-        if 'timestamp' in df.columns:
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-            time_min = df['timestamp'].min()
-            time_max = df['timestamp'].max()
-            time_range = time_max - time_min
-            
-            print(f"⏰ Time range:")
-            print(f"   Start: {time_min}")
-            print(f"   End:   {time_max}")
-            print(f"   Duration: {time_range}")
-            
-            # Check for time gaps (if more than 2 seconds between consecutive readings)
-            df_sorted = df.sort_values('timestamp')
-            time_diffs = df_sorted['timestamp'].diff().dt.total_seconds()
-            large_gaps = time_diffs[time_diffs > 2].dropna()
-            
-            if len(large_gaps) > 0:
-                print(f"⚠️  Time gaps detected: {len(large_gaps)} gaps > 2 seconds")
-                print(f"   Largest gap: {large_gaps.max():.1f} seconds")
-            else:
-                print(f"✅ Time consistency: No significant gaps detected")
+        timestamp_column = None
+        for col in ['timestamp', 'minute_bucket', 'hour_bucket', 'day_bucket']:
+            if col in df.columns:
+                timestamp_column = col
+                break
+        
+        if timestamp_column:
+            try:
+                # Try different parsing methods for timestamps
+                original_col = df[timestamp_column].copy()
+                try:
+                    # First try standard pandas parsing
+                    df[timestamp_column] = pd.to_datetime(df[timestamp_column])
+                except:
+                    try:
+                        # Try ISO8601 format
+                        df[timestamp_column] = pd.to_datetime(df[timestamp_column], format='ISO8601')
+                    except:
+                        try:
+                            # Try mixed format
+                            df[timestamp_column] = pd.to_datetime(df[timestamp_column], format='mixed')
+                        except:
+                            # If all parsing fails, show raw values and skip time analysis
+                            print(f"⚠️  Could not parse {timestamp_column} column as datetime")
+                            print(f"   Sample values: {original_col.head(3).tolist()}")
+                            df[timestamp_column] = original_col  # Restore original
+                            timestamp_column = None
+                
+                if timestamp_column and pd.api.types.is_datetime64_any_dtype(df[timestamp_column]):
+                    time_min = df[timestamp_column].min()
+                    time_max = df[timestamp_column].max()
+                    time_range = time_max - time_min
+                    
+                    print(f"⏰ Time range:")
+                    print(f"   Start: {time_min}")
+                    print(f"   End:   {time_max}")
+                    print(f"   Duration: {time_range}")
+                    
+                    # Check for time gaps (if more than 2 seconds between consecutive readings)
+                    if timestamp_column == 'timestamp':  # Only for raw data
+                        df_sorted = df.sort_values(timestamp_column)
+                        time_diffs = df_sorted[timestamp_column].diff().dt.total_seconds()
+                        large_gaps = time_diffs[time_diffs > 2].dropna()
+                        
+                        if len(large_gaps) > 0:
+                            print(f"⚠️  Time gaps detected: {len(large_gaps)} gaps > 2 seconds")
+                            print(f"   Largest gap: {large_gaps.max():.1f} seconds")
+                        else:
+                            print(f"✅ Time consistency: No significant gaps detected")
+                            
+            except Exception as e:
+                print(f"⚠️  Error analyzing timestamps: {e}")
         
         # Value analysis
         numeric_columns = df.select_dtypes(include=['number']).columns
