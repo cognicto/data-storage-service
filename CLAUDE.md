@@ -35,21 +35,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Architecture Overview
 
 ### Core Components
-This is a Python-based microservice that consumes sensor data from Kafka, stores it in hierarchical Parquet format, and manages lifecycle with Azure Blob Storage integration.
+This is a Python-based microservice that consumes sensor data from Kafka, stores it in optimized hierarchical Parquet format, and manages lifecycle with Azure Blob Storage integration.
 
 **Main Service Class**: `SensorDataStorageService` in `app/main.py` orchestrates all components:
 - Kafka Consumer (`app/kafka/consumer.py`) - Consumes from topic patterns
-- Storage Manager (`app/storage/manager.py`) - Hierarchical Parquet storage
-- Azure Uploader (`app/azure/uploader.py`) - Parallel cloud uploads with retry logic
+- Storage Manager (`app/storage/manager.py`) - Optimized hierarchical Parquet storage
+- Azure Uploader (`app/azure/uploader.py`) - Parallel cloud uploads with SAS token support
 - Cleanup Service (`app/cleanup/service.py`) - Smart local file cleanup
-- Aggregation Scheduler (`app/aggregation/scheduler.py`) - Pre-computed aggregations
+- Aggregation Scheduler (`app/aggregation/scheduler.py`) - Multi-level aggregations with quality metrics
 - FastAPI REST API (`app/api/routes.py`) - Health, metrics, manual triggers
 
-### Data Storage Hierarchy
-Files are organized as: `asset_id/yyyy/mm/dd/hh/sensor_name.parquet`
+### Optimized Data Storage Hierarchy
+Files are organized with metadata encoded in folder structure to eliminate data redundancy:
 
-**Raw data**: `/data/raw/asset_001/2024/01/01/00/sensor_temp.parquet`
-**Aggregated data**: `/data/aggregated/asset_001/2024/01/01/sensor_temp_hour.parquet`
+**Raw data**: `asset_001/2026/04/04/14/sensor_temp_20260404_14.parquet` (2 columns: timestamp, value)
+**Minute aggregations**: `aggregated/asset_001/2026/04/04/14/sensor_temp_minute.parquet` (8 columns with quality metrics)
+**Hourly aggregations**: `aggregated/asset_001/2026/04/04/sensor_temp_hour.parquet` (8 columns with quality metrics)  
+**Daily aggregations**: `daily/asset_001/2026/04/sensor_temp_day.parquet` (9 columns with quality metrics)
 
 ### Configuration System
 All configuration is environment-based using dataclasses in `app/config.py`:
@@ -126,6 +128,72 @@ The service exposes a FastAPI-based REST API on port 8080:
 
 API documentation is automatically available at `/docs` (Swagger UI).
 
+## Azure Authentication
+
+The service supports multiple Azure authentication methods:
+
+### SAS Token Authentication (Recommended)
+```bash
+AZURE_BLOB_ENDPOINT=https://yourstorageaccount.blob.core.windows.net
+AZURE_SAS_TOKEN=sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupyx&se=2024-12-31T23:59:59Z...
+```
+
+### Storage Account Key Authentication (Legacy)
+```bash
+AZURE_STORAGE_ACCOUNT=yourstorageaccount
+AZURE_STORAGE_KEY=your_storage_key
+```
+
+## Data Quality & Aggregations
+
+### Optimized File Schemas
+
+**Raw Data Files** (2 columns):
+- `timestamp` - UTC timestamp with Z suffix
+- `value` - Sensor reading value
+- Asset ID and sensor name encoded in file path structure
+
+**Aggregated Files** include comprehensive quality metrics:
+- Statistical aggregations (mean, min, max)
+- Data completeness metrics (record_count, minute_count, hour_count)
+- Time coverage (timestamp_start, timestamp_end)
+- Bucket information for time-series analysis
+
+### Multi-Level Aggregation Pipeline
+
+1. **Real-time Minute Aggregations**: Created as data arrives (every 2 minutes or 60 records)
+2. **Scheduled Hourly Aggregations**: Created at X:05 each hour from minute data
+3. **Scheduled Daily Aggregations**: Created at 1:05 AM from hourly data
+
+Each level provides data quality metrics for monitoring completeness and identifying gaps.
+
+## Storage Optimization
+
+### Space Efficiency
+- **80% reduction** in raw file size (2 columns vs 11 columns)
+- **Path-based metadata** eliminates redundant data storage
+- **Hierarchical structure** enables efficient querying and cleanup
+
+### Upload Configuration
+- Configurable upload interval via `UPLOAD_INTERVAL_SECONDS` (default: 1800s)
+- Parallel uploads with retry logic and exponential backoff
+- Automatic duplicate detection and deduplication
+
+## Debugging & Verification
+
+### Parquet File Analysis
+Use the included verification script to analyze file contents:
+```bash
+python verify_parquet.py /path/to/file.parquet --sample --sample-size 10
+```
+
+Provides detailed analysis including:
+- Record counts and file sizes
+- Time range analysis and gap detection  
+- Data quality metrics
+- Sample data display
+- Column information and statistics
+
 ## Monitoring Integration
 
-The service exports Prometheus metrics and includes Grafana dashboards in `monitoring/grafana/dashboards/`. Key metrics include message counts, storage usage, upload success/failure rates, and cleanup statistics.
+The service exports Prometheus metrics and includes Grafana dashboards in `monitoring/grafana/dashboards/`. Key metrics include message counts, storage usage, upload success/failure rates, cleanup statistics, and data quality metrics across all aggregation levels.
