@@ -138,14 +138,45 @@ class AggregationScheduler:
             if not numeric_columns:
                 return
             
-            # Group by hour and aggregate
-            hourly_agg = hour_data.groupby(['sensor_name', 'asset_id']).agg({
-                **{col: ['mean', 'min', 'max'] for col in numeric_columns},
-                'minute_bucket': 'first'
-            }).reset_index()
+            # Group by hour and aggregate (no need to group by sensor/asset since file is already per-sensor)
+            # Get timestamp columns if they exist (from enhanced minute aggregations)
+            timestamp_cols = {}
+            if 'timestamp_start' in hour_data.columns:
+                timestamp_cols['timestamp_start'] = ['first', 'last']
+            if 'timestamp_end' in hour_data.columns:
+                timestamp_cols['timestamp_end'] = 'last'
+            if 'record_count' in hour_data.columns:
+                timestamp_cols['record_count'] = 'sum'
             
-            # Flatten column names
-            hourly_agg.columns = ['_'.join(col).strip('_') if col[1] else col[0] for col in hourly_agg.columns.values]
+            # Create aggregation dictionary
+            agg_dict = {
+                **{col: ['mean', 'min', 'max'] for col in numeric_columns},
+                'minute_bucket': ['first', 'count'],
+                **timestamp_cols
+            }
+            
+            hourly_agg = hour_data.agg(agg_dict).to_frame().T
+            
+            # Flatten column names and rename for clarity
+            new_columns = []
+            for col in hourly_agg.columns.values:
+                if col[1]:  # Multi-level column
+                    if col[0] == 'minute_bucket' and col[1] == 'first':
+                        new_columns.append('first_minute_bucket')
+                    elif col[0] == 'minute_bucket' and col[1] == 'count':
+                        new_columns.append('minute_count')
+                    elif col[0] == 'timestamp_start' and col[1] == 'first':
+                        new_columns.append('timestamp_start')
+                    elif col[0] == 'timestamp_start' and col[1] == 'last':
+                        new_columns.append('timestamp_end')
+                    elif col[0] == 'record_count' and col[1] == 'sum':
+                        new_columns.append('record_count')
+                    else:
+                        new_columns.append('_'.join(col).strip('_'))
+                else:  # Single-level column
+                    new_columns.append(col[0])
+            
+            hourly_agg.columns = new_columns
             
             # Add hour bucket
             hourly_agg['hour_bucket'] = target_hour.strftime('%Y-%m-%d %H:00:00')
@@ -238,14 +269,49 @@ class AggregationScheduler:
             if not numeric_columns:
                 return
             
-            # Group by sensor and aggregate
-            daily_agg = combined_df.groupby(['sensor_name', 'asset_id']).agg({
-                **{col: ['mean', 'min', 'max'] for col in numeric_columns},
-                'hour_bucket': 'first'
-            }).reset_index()
+            # Aggregate without grouping by sensor/asset since file is per-sensor
+            # Get timestamp and count columns if they exist (from enhanced hourly aggregations)
+            timestamp_cols = {}
+            if 'timestamp_start' in combined_df.columns:
+                timestamp_cols['timestamp_start'] = ['first', 'last']
+            if 'timestamp_end' in combined_df.columns:
+                timestamp_cols['timestamp_end'] = 'last'
+            if 'record_count' in combined_df.columns:
+                timestamp_cols['record_count'] = 'sum'
+            if 'minute_count' in combined_df.columns:
+                timestamp_cols['minute_count'] = 'sum'
             
-            # Flatten column names
-            daily_agg.columns = ['_'.join(col).strip('_') if col[1] else col[0] for col in daily_agg.columns.values]
+            # Create aggregation dictionary
+            agg_dict = {
+                **{col: ['mean', 'min', 'max'] for col in numeric_columns},
+                'hour_bucket': ['first', 'count'],
+                **timestamp_cols
+            }
+            
+            daily_agg = combined_df.agg(agg_dict).to_frame().T
+            
+            # Flatten column names and rename for clarity
+            new_columns = []
+            for col in daily_agg.columns.values:
+                if col[1]:  # Multi-level column
+                    if col[0] == 'hour_bucket' and col[1] == 'first':
+                        new_columns.append('first_hour_bucket')
+                    elif col[0] == 'hour_bucket' and col[1] == 'count':
+                        new_columns.append('hour_count')
+                    elif col[0] == 'timestamp_start' and col[1] == 'first':
+                        new_columns.append('timestamp_start')
+                    elif col[0] == 'timestamp_start' and col[1] == 'last':
+                        new_columns.append('timestamp_end')
+                    elif col[0] == 'record_count' and col[1] == 'sum':
+                        new_columns.append('record_count')
+                    elif col[0] == 'minute_count' and col[1] == 'sum':
+                        new_columns.append('minute_count')
+                    else:
+                        new_columns.append('_'.join(col).strip('_'))
+                else:  # Single-level column
+                    new_columns.append(col[0])
+            
+            daily_agg.columns = new_columns
             
             # Add day bucket
             daily_agg['day_bucket'] = target_date.strftime('%Y-%m-%d')

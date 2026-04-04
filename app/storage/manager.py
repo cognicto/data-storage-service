@@ -368,9 +368,8 @@ class HierarchicalStorageManager:
                     numeric_data[key] = value
             
             if numeric_data:
+                # Only store essential data - asset_id and sensor_name are in folder structure
                 aggregated_record = {
-                    'sensor_name': metadata['sensor_name'],
-                    'asset_id': metadata['asset_id'],
                     'timestamp': flattened_data['timestamp'],
                     'minute_bucket': flattened_data['timestamp'][:16] + ":00",  # Round to minute
                     **numeric_data
@@ -401,28 +400,57 @@ class HierarchicalStorageManager:
             if not numeric_columns:
                 return
             
-            # Aggregate by minute
-            aggregated = df.groupby(['minute_bucket', 'sensor_name', 'asset_id']).agg({
-                **{col: ['mean', 'min', 'max'] for col in numeric_columns},
-                'timestamp': 'first'
+            # Aggregate by minute - don't group by sensor_name/asset_id since they're in the path
+            aggregated = df.groupby(['minute_bucket']).agg({
+                **{col: ['mean', 'min', 'max', 'count'] for col in numeric_columns},
+                'timestamp': ['first', 'last', 'count']
             }).reset_index()
             
-            # Flatten column names
-            aggregated.columns = ['_'.join(col).strip('_') if col[1] else col[0] for col in aggregated.columns.values]
+            # Flatten column names and rename for clarity
+            new_columns = []
+            for col in aggregated.columns.values:
+                if col[1]:  # Multi-level column
+                    if col[0] == 'timestamp' and col[1] == 'first':
+                        new_columns.append('timestamp_start')
+                    elif col[0] == 'timestamp' and col[1] == 'last':
+                        new_columns.append('timestamp_end')
+                    elif col[0] == 'timestamp' and col[1] == 'count':
+                        new_columns.append('record_count')
+                    else:
+                        new_columns.append('_'.join(col).strip('_'))
+                else:  # Single-level column
+                    new_columns.append(col[0])
             
-            # Get metadata from first record
-            first_record = data_list[0]
-            timestamp_obj = datetime.fromisoformat(first_record['timestamp'].replace('Z', '+00:00'))
+            aggregated.columns = new_columns
+            
+            # Extract metadata from minute_key since records no longer contain asset_id/sensor_name
+            # minute_key format: asset_id/yyyy/mm/dd/hh/sensor_name_minute
+            key_parts = minute_key.split('/')
+            if len(key_parts) >= 6:
+                asset_id = key_parts[0]
+                year, month, day, hour = key_parts[1:5]
+                sensor_part = key_parts[5]  # sensor_name_minute
+                sensor_name = sensor_part.replace('_minute', '') if sensor_part.endswith('_minute') else sensor_part
+            else:
+                # Fallback
+                first_record = data_list[0]
+                timestamp_obj = datetime.fromisoformat(first_record['timestamp'].replace('Z', '+00:00'))
+                asset_id = 'unknown_asset'
+                sensor_name = 'unknown_sensor'
+                year = f"{timestamp_obj.year:04d}"
+                month = f"{timestamp_obj.month:02d}"
+                day = f"{timestamp_obj.day:02d}"
+                hour = f"{timestamp_obj.hour:02d}"
             
             # Create aggregated file path: aggregated/asset_id/yyyy/mm/dd/hh/sensor_minute.parquet
             agg_path = (
                 self.local_path / "aggregated" /
-                first_record['asset_id'] /
-                f"{timestamp_obj.year:04d}" /
-                f"{timestamp_obj.month:02d}" /
-                f"{timestamp_obj.day:02d}" /
-                f"{timestamp_obj.hour:02d}" /
-                f"{first_record['sensor_name']}_minute.parquet"
+                asset_id /
+                year /
+                month /
+                day /
+                hour /
+                f"{sensor_name}_minute.parquet"
             )
             
             # Create directory and save
