@@ -26,6 +26,22 @@ class AggregationScheduler:
 
         logger.info(f"Initialized aggregation scheduler for: {storage_path}")
 
+    def needs_reaggregation(self, aggregation_file: Path, source_files: List[Path]) -> bool:
+        """Check if aggregation needs update based on source file modification times."""
+        if not aggregation_file.exists():
+            return True
+        
+        try:
+            agg_mtime = aggregation_file.stat().st_mtime
+            for source_file in source_files:
+                if source_file.exists() and source_file.stat().st_mtime > agg_mtime:
+                    logger.info(f"Reaggregation needed: {source_file} newer than {aggregation_file}")
+                    return True
+            return False
+        except Exception as e:
+            logger.error(f"Error checking file modification times: {e}")
+            return True  # Re-aggregate on error to be safe
+
     def start_scheduled_aggregations(self):
         """Start scheduled aggregation processing."""
         if self.running:
@@ -120,9 +136,25 @@ class AggregationScheduler:
                 # Process each sensor
                 for minute_file in asset_hour_path.glob("*_minute.parquet"):
                     sensor_name = minute_file.stem.replace("_minute", "")
-                    self._aggregate_minute_to_hour(
-                        minute_file, sensor_name, asset_dir.name, target_hour
+                    
+                    # Check if hourly aggregation needs update
+                    hourly_path = (
+                        self.storage_path
+                        / "aggregated"
+                        / asset_dir.name
+                        / f"{target_hour.year:04d}"
+                        / f"{target_hour.month:02d}"
+                        / f"{target_hour.day:02d}"
+                        / f"{sensor_name}_hour.parquet"
                     )
+                    
+                    if self.needs_reaggregation(hourly_path, [minute_file]):
+                        logger.info(f"Updating hourly aggregation due to modified minute file: {minute_file}")
+                        self._aggregate_minute_to_hour(
+                            minute_file, sensor_name, asset_dir.name, target_hour
+                        )
+                    else:
+                        logger.debug(f"Hourly aggregation up-to-date: {hourly_path}")
 
             logger.info(
                 f"Completed hourly aggregations for {target_hour.strftime('%Y-%m-%d %H:00')}"
@@ -158,45 +190,16 @@ class AggregationScheduler:
             if not numeric_columns:
                 return
 
-            # Group by hour and aggregate (no need to group by sensor/asset since file is already per-sensor)
-            # Get timestamp columns if they exist (from enhanced minute aggregations)
-            timestamp_cols = {}
-            if "timestamp_start" in hour_data.columns:
-                timestamp_cols["timestamp_start"] = ["first", "last"]
-            if "timestamp_end" in hour_data.columns:
-                timestamp_cols["timestamp_end"] = "last"
-            if "record_count" in hour_data.columns:
-                timestamp_cols["record_count"] = "sum"
-
-            # Create aggregation dictionary
-            agg_dict = {
-                **{col: ["mean", "min", "max"] for col in numeric_columns},
-                "minute_bucket": ["first", "count"],
-                **timestamp_cols,
-            }
-
-            hourly_agg = hour_data.agg(agg_dict).to_frame().T
-
-            # Flatten column names and rename for clarity
-            new_columns = []
-            for col in hourly_agg.columns.values:
-                if col[1]:  # Multi-level column
-                    if col[0] == "minute_bucket" and col[1] == "first":
-                        new_columns.append("first_minute_bucket")
-                    elif col[0] == "minute_bucket" and col[1] == "count":
-                        new_columns.append("minute_count")
-                    elif col[0] == "timestamp_start" and col[1] == "first":
-                        new_columns.append("timestamp_start")
-                    elif col[0] == "timestamp_start" and col[1] == "last":
-                        new_columns.append("timestamp_end")
-                    elif col[0] == "record_count" and col[1] == "sum":
-                        new_columns.append("record_count")
-                    else:
-                        new_columns.append("_".join(col).strip("_"))
-                else:  # Single-level column
-                    new_columns.append(col[0])
-
-            hourly_agg.columns = new_columns
+            # Create simple hourly aggregation 
+            hourly_agg = pd.DataFrame({
+                'value_mean': [hour_data[numeric_columns].mean().iloc[0]],
+                'value_min': [hour_data[numeric_columns].min().iloc[0]],  
+                'value_max': [hour_data[numeric_columns].max().iloc[0]],
+                'record_count': [hour_data['record_count'].sum() if 'record_count' in hour_data.columns else len(hour_data)],
+                'minute_count': [len(hour_data)],
+                'timestamp_start': [hour_data['timestamp_start'].iloc[0] if 'timestamp_start' in hour_data.columns else hour_data.index[0]],
+                'timestamp_end': [hour_data['timestamp_end'].iloc[-1] if 'timestamp_end' in hour_data.columns else hour_data.index[-1]]
+            })
 
             # Add hour bucket
             hourly_agg["hour_bucket"] = target_hour.strftime("%Y-%m-%d %H:00:00")
@@ -212,19 +215,9 @@ class AggregationScheduler:
                 / f"{sensor_name}_hour.parquet"
             )
 
-            # Save hourly aggregation
+            # Save hourly aggregation (always overwrite to ensure latest data)
             hourly_path.parent.mkdir(parents=True, exist_ok=True)
-
-            if hourly_path.exists():
-                existing_df = pd.read_parquet(hourly_path)
-                combined_df = pd.concat([existing_df, hourly_agg], ignore_index=True)
-                combined_df.to_parquet(
-                    hourly_path, compression=self.compression, index=False
-                )
-            else:
-                hourly_agg.to_parquet(
-                    hourly_path, compression=self.compression, index=False
-                )
+            hourly_agg.to_parquet(hourly_path, compression=self.compression, index=False)
 
             logger.debug(f"Created hourly aggregation: {hourly_path}")
 
@@ -261,9 +254,23 @@ class AggregationScheduler:
 
                 # Create daily aggregations for each sensor
                 for sensor_name, files in sensor_files.items():
-                    self._aggregate_hour_to_day(
-                        files, sensor_name, asset_dir.name, target_date
+                    # Check if daily aggregation needs update
+                    daily_path = (
+                        self.storage_path
+                        / "daily"
+                        / asset_dir.name
+                        / f"{target_date.year:04d}"
+                        / f"{target_date.month:02d}"
+                        / f"{sensor_name}_day.parquet"
                     )
+                    
+                    if self.needs_reaggregation(daily_path, files):
+                        logger.info(f"Updating daily aggregation due to modified hourly files: {files}")
+                        self._aggregate_hour_to_day(
+                            files, sensor_name, asset_dir.name, target_date
+                        )
+                    else:
+                        logger.debug(f"Daily aggregation up-to-date: {daily_path}")
 
             logger.info(f"Completed daily aggregations for {target_date}")
 
@@ -300,49 +307,17 @@ class AggregationScheduler:
             if not numeric_columns:
                 return
 
-            # Aggregate without grouping by sensor/asset since file is per-sensor
-            # Get timestamp and count columns if they exist (from enhanced hourly aggregations)
-            timestamp_cols = {}
-            if "timestamp_start" in combined_df.columns:
-                timestamp_cols["timestamp_start"] = ["first", "last"]
-            if "timestamp_end" in combined_df.columns:
-                timestamp_cols["timestamp_end"] = "last"
-            if "record_count" in combined_df.columns:
-                timestamp_cols["record_count"] = "sum"
-            if "minute_count" in combined_df.columns:
-                timestamp_cols["minute_count"] = "sum"
-
-            # Create aggregation dictionary
-            agg_dict = {
-                **{col: ["mean", "min", "max"] for col in numeric_columns},
-                "hour_bucket": ["first", "count"],
-                **timestamp_cols,
-            }
-
-            daily_agg = combined_df.agg(agg_dict).to_frame().T
-
-            # Flatten column names and rename for clarity
-            new_columns = []
-            for col in daily_agg.columns.values:
-                if col[1]:  # Multi-level column
-                    if col[0] == "hour_bucket" and col[1] == "first":
-                        new_columns.append("first_hour_bucket")
-                    elif col[0] == "hour_bucket" and col[1] == "count":
-                        new_columns.append("hour_count")
-                    elif col[0] == "timestamp_start" and col[1] == "first":
-                        new_columns.append("timestamp_start")
-                    elif col[0] == "timestamp_start" and col[1] == "last":
-                        new_columns.append("timestamp_end")
-                    elif col[0] == "record_count" and col[1] == "sum":
-                        new_columns.append("record_count")
-                    elif col[0] == "minute_count" and col[1] == "sum":
-                        new_columns.append("minute_count")
-                    else:
-                        new_columns.append("_".join(col).strip("_"))
-                else:  # Single-level column
-                    new_columns.append(col[0])
-
-            daily_agg.columns = new_columns
+            # Create simple daily aggregation
+            daily_agg = pd.DataFrame({
+                'value_mean': [combined_df[numeric_columns].mean().iloc[0]],
+                'value_min': [combined_df[numeric_columns].min().iloc[0]],
+                'value_max': [combined_df[numeric_columns].max().iloc[0]],
+                'record_count': [combined_df['record_count'].sum() if 'record_count' in combined_df.columns else len(combined_df)],
+                'minute_count': [combined_df['minute_count'].sum() if 'minute_count' in combined_df.columns else 0],
+                'hour_count': [len(combined_df)],
+                'timestamp_start': [combined_df['timestamp_start'].iloc[0] if 'timestamp_start' in combined_df.columns else combined_df.index[0]],
+                'timestamp_end': [combined_df['timestamp_end'].iloc[-1] if 'timestamp_end' in combined_df.columns else combined_df.index[-1]]
+            })
 
             # Add day bucket
             daily_agg["day_bucket"] = target_date.strftime("%Y-%m-%d")
@@ -357,19 +332,9 @@ class AggregationScheduler:
                 / f"{sensor_name}_day.parquet"
             )
 
-            # Save daily aggregation
+            # Save daily aggregation (always overwrite to ensure latest data)
             daily_path.parent.mkdir(parents=True, exist_ok=True)
-
-            if daily_path.exists():
-                existing_df = pd.read_parquet(daily_path)
-                combined_df = pd.concat([existing_df, daily_agg], ignore_index=True)
-                combined_df.to_parquet(
-                    daily_path, compression=self.compression, index=False
-                )
-            else:
-                daily_agg.to_parquet(
-                    daily_path, compression=self.compression, index=False
-                )
+            daily_agg.to_parquet(daily_path, compression=self.compression, index=False)
 
             logger.debug(f"Created daily aggregation: {daily_path}")
 

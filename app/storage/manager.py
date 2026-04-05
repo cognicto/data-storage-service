@@ -513,35 +513,77 @@ class HierarchicalStorageManager:
 
             if agg_path.exists():
                 existing_df = pd.read_parquet(agg_path)
-                # Avoid duplicate minute buckets by checking existing data
+                # Check for overlapping minute buckets (late data scenario)
                 existing_buckets = set(existing_df["minute_bucket"].tolist())
                 new_buckets = set(aggregated["minute_bucket"].tolist())
-
-                # Only append records with new minute buckets
-                new_records = aggregated[
-                    ~aggregated["minute_bucket"].isin(existing_buckets)
-                ]
-
-                if len(new_records) > 0:
-                    combined_df = pd.concat(
-                        [existing_df, new_records], ignore_index=True
-                    )
-                    # Sort by minute_bucket to maintain order
-                    combined_df = combined_df.sort_values("minute_bucket").reset_index(
-                        drop=True
-                    )
-                    combined_df.to_parquet(
-                        agg_path, compression=self.compression, index=False
-                    )
-                    logger.info(
-                        f"Added {len(new_records)} new minute aggregations to {agg_path}"
-                    )
+                
+                overlapping_buckets = existing_buckets.intersection(new_buckets)
+                
+                if overlapping_buckets:
+                    # Late data scenario: re-aggregate from raw data for affected buckets
+                    logger.info(f"Late data detected for minute buckets: {overlapping_buckets}")
+                    
+                    # For late data, we need to re-read the raw file and re-aggregate
+                    # This ensures accurate aggregation including late-arriving data
+                    raw_path = self.local_path / asset_id / year / month / day / hour
+                    raw_files = list(raw_path.glob(f"{sensor_name}_*.parquet"))
+                    
+                    if raw_files:
+                        # Re-aggregate from raw data
+                        raw_df = pd.read_parquet(raw_files[0])
+                        raw_df['minute_bucket'] = raw_df['timestamp'].str[:16] + ":00"
+                        
+                        # Group by minute bucket and re-aggregate
+                        numeric_columns = raw_df.select_dtypes(include=["number"]).columns
+                        numeric_columns = [col for col in numeric_columns if col not in ["timestamp"]]
+                        
+                        if numeric_columns:
+                            re_aggregated = (
+                                raw_df.groupby(["minute_bucket"])
+                                .agg({
+                                    **{col: ["mean", "min", "max", "count"] for col in numeric_columns},
+                                    "timestamp": ["first", "last", "count"],
+                                })
+                                .reset_index()
+                            )
+                            
+                            # Flatten column names
+                            new_columns = []
+                            for col in re_aggregated.columns.values:
+                                if col[1]:  # Multi-level column
+                                    if col[0] == "timestamp" and col[1] == "first":
+                                        new_columns.append("timestamp_start")
+                                    elif col[0] == "timestamp" and col[1] == "last":
+                                        new_columns.append("timestamp_end")
+                                    elif col[0] == "timestamp" and col[1] == "count":
+                                        new_columns.append("record_count")
+                                    else:
+                                        new_columns.append("_".join(col).strip("_"))
+                                else:  # Single-level column
+                                    new_columns.append(col[0])
+                            
+                            re_aggregated.columns = new_columns
+                            
+                            # Replace existing aggregation with re-aggregated data
+                            combined_df = re_aggregated.sort_values("minute_bucket").reset_index(drop=True)
+                            combined_df.to_parquet(agg_path, compression=self.compression, index=False)
+                            logger.info(f"Re-aggregated minute data including late arrivals: {agg_path}")
+                        else:
+                            logger.warning(f"No numeric columns found for re-aggregation: {agg_path}")
+                    else:
+                        # Fallback: merge new data with existing (less accurate but safer)
+                        combined_df = pd.concat([existing_df, aggregated], ignore_index=True)
+                        combined_df = combined_df.sort_values("minute_bucket").reset_index(drop=True)
+                        combined_df.to_parquet(agg_path, compression=self.compression, index=False)
+                        logger.warning(f"Fallback merge for late data: {agg_path}")
                 else:
-                    logger.debug(f"No new minute buckets to add to {agg_path}")
+                    # No overlapping buckets: normal append
+                    combined_df = pd.concat([existing_df, aggregated], ignore_index=True)
+                    combined_df = combined_df.sort_values("minute_bucket").reset_index(drop=True)
+                    combined_df.to_parquet(agg_path, compression=self.compression, index=False)
+                    logger.info(f"Added {len(aggregated)} new minute aggregations to {agg_path}")
             else:
-                aggregated.to_parquet(
-                    agg_path, compression=self.compression, index=False
-                )
+                aggregated.to_parquet(agg_path, compression=self.compression, index=False)
 
             # Clear buffer
             del self._minute_buffers[minute_key]

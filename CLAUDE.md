@@ -19,6 +19,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Testing
 - `pytest tests/ -v` - Run tests with verbose output
 - `pytest tests/ --cov=app --cov-report=html` - Run tests with coverage report
+- `pytest tests/unit/test_aggregation.py -v` - Run aggregation unit tests (cascade updates)
+- `pytest tests/unit/test_storage.py -v` - Run storage manager tests (optimized schema)
+- `pytest tests/integration/test_end_to_end.py -v` - Run end-to-end integration tests
 - `make test-kafka` - Run Kafka test producer script
 
 ### Docker Operations
@@ -109,6 +112,14 @@ Components use thread-safe operations and daemon threads for clean shutdown. Sig
 - Connection pooling for Azure operations
 - File handles properly closed with context managers
 
+### Timestamp Handling
+All timestamps are handled consistently across the entire pipeline to match TimescaleDB format:
+- **Input Processing**: Supports Unix timestamps (seconds/milliseconds), ISO formats, and string timestamps
+- **UTC Conversion**: All timestamps converted to UTC using `datetime.utcfromtimestamp()` for Unix timestamps
+- **No Timezone Suffixes**: Timestamps stored without 'Z' or '+00:00' suffixes to match TimescaleDB format
+- **Consistent Format**: All files (raw, minute, hourly, daily) use clean UTC format like `2026-04-04T08:39:00`
+- **TimescaleDB Compatibility**: Ensures direct compatibility with TimescaleDB `timestamp without time zone` columns
+
 ### Testing Strategy
 - Unit tests for individual components in `tests/unit/`
 - Integration tests for end-to-end flows in `tests/integration/`
@@ -149,7 +160,7 @@ AZURE_STORAGE_KEY=your_storage_key
 ### Optimized File Schemas
 
 **Raw Data Files** (2 columns):
-- `timestamp` - UTC timestamp with Z suffix
+- `timestamp` - UTC timestamp without timezone suffix (matches TimescaleDB format)
 - `value` - Sensor reading value
 - Asset ID and sensor name encoded in file path structure
 
@@ -166,6 +177,49 @@ AZURE_STORAGE_KEY=your_storage_key
 3. **Scheduled Daily Aggregations**: Created at 1:05 AM from hourly data
 
 Each level provides data quality metrics for monitoring completeness and identifying gaps.
+
+## Cascade Update System for Late-Arriving Data
+
+### Simple Late Data Strategy
+The service implements a file modification time-based approach to handle late-arriving sensor data:
+
+1. **Extended Retention**: Local files kept for 30 days (configurable via `CLEANUP_AGE_DAYS`)
+2. **Automatic Detection**: File modification times track when data changes
+3. **Cascade Propagation**: Changes automatically flow through aggregation levels
+
+### Implementation
+The `AggregationScheduler` includes a `needs_reaggregation()` method in `app/aggregation/scheduler.py`:
+
+```python
+def needs_reaggregation(self, aggregation_file: Path, source_files: List[Path]) -> bool:
+    """Check if aggregation needs update based on source file modification times."""
+    if not aggregation_file.exists():
+        return True
+    
+    agg_mtime = aggregation_file.stat().st_mtime
+    for source_file in source_files:
+        if source_file.exists() and source_file.stat().st_mtime > agg_mtime:
+            return True  # Source file is newer, re-aggregate needed
+    return False
+```
+
+### Cascade Flow
+1. Late data updates minute aggregation files (existing mechanism)
+2. File modification times change automatically
+3. Hourly scheduler detects newer minute files and re-aggregates
+4. Daily scheduler detects newer hourly files and re-aggregates
+5. Updated files become candidates for Azure upload due to new modification times
+
+### Benefits
+- ✅ Simple implementation using standard filesystem metadata
+- ✅ Automatic propagation through all aggregation levels
+- ✅ Efficient - only re-aggregates when actually needed
+- ✅ Self-healing - ensures eventual consistency
+
+### Testing
+Comprehensive test coverage for cascade functionality in:
+- `tests/unit/test_aggregation.py` - Unit tests for modification time detection and aggregation logic
+- `tests/integration/test_end_to_end.py` - End-to-end cascade update integration tests
 
 ## Storage Optimization
 

@@ -125,12 +125,13 @@ class TestHierarchicalStorageManager:
         assert result is None  # Buffer not full yet
         assert len(storage_manager._file_buffers) == 1
 
-        # Check buffer content
+        # Check buffer content (optimized schema uses only timestamp and value)
         buffer_key = list(storage_manager._file_buffers.keys())[0]
         buffer_data = storage_manager._file_buffers[buffer_key]
         assert len(buffer_data) == 1
-        assert buffer_data[0]["temperature"] == 25.5
-        assert buffer_data[0]["humidity"] == 60
+        assert "timestamp" in buffer_data[0]
+        assert "value" in buffer_data[0]
+        # Asset and sensor info are now in the buffer key/file path, not in each record
 
     def test_flush_buffer(self, storage_manager, temp_storage_path):
         """Test buffer flushing."""

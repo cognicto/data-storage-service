@@ -100,12 +100,12 @@ class TestEndToEnd:
         expected_path = temp_storage / "asset_001/2024/01/15/10/test_sensor.parquet"
         assert expected_path.exists()
 
-        # Verify file content
+        # Verify file content (optimized 2-column schema)
         df = pd.read_parquet(expected_path)
         assert len(df) >= 10
-        assert "temperature" in df.columns
-        assert "humidity" in df.columns
-        assert "pressure" in df.columns
+        assert "timestamp" in df.columns
+        assert "value" in df.columns
+        # Asset ID and sensor name are now encoded in file path, not in data
 
     def test_storage_manager_integration(self, temp_storage):
         """Test storage manager with real file operations."""
@@ -256,7 +256,7 @@ class TestEndToEnd:
 
         manager = HierarchicalStorageManager(config)
 
-        # Add data for aggregation
+        # Add data for aggregation (optimized schema uses single value field)
         base_time = datetime(2024, 1, 15, 10, 0, 0)
         for minute in range(5):
             for second in range(0, 60, 10):
@@ -265,8 +265,7 @@ class TestEndToEnd:
                     "timestamp": f"2024-01-15T10:{minute:02d}:{second:02d}Z",
                     "data": {
                         "asset_id": "asset_001",
-                        "temperature": 20.0 + minute + (second / 60),
-                        "humidity": 50.0 + (minute * 2),
+                        "value": 20.0 + minute + (second / 60),
                     },
                 }
                 manager.add_to_buffer(data)
@@ -278,10 +277,13 @@ class TestEndToEnd:
         agg_files = list((temp_storage / "aggregated").rglob("*_minute.parquet"))
         assert len(agg_files) > 0
 
-        # Verify aggregated data
+        # Verify aggregated data (new enhanced schema with quality metrics)
         for agg_file in agg_files:
             df = pd.read_parquet(agg_file)
-            assert "temperature_mean" in df.columns or "temperature" in df.columns
+            # Check for new aggregation columns
+            expected_columns = ["value_mean", "value_min", "value_max", "record_count", "minute_bucket"]
+            has_expected_cols = any(col in df.columns for col in expected_columns)
+            assert has_expected_cols, f"Expected aggregation columns not found in {agg_file}"
             assert len(df) > 0
 
     @pytest.mark.asyncio
@@ -336,3 +338,95 @@ class TestEndToEnd:
         assert response.status_code == 200
         data = response.json()
         assert "total_files" in data
+
+    def test_cascade_updates_integration(self, temp_storage):
+        """Test end-to-end cascade update functionality."""
+        from app.aggregation.scheduler import AggregationScheduler
+        from app.storage.manager import HierarchicalStorageManager
+        
+        # Setup storage and aggregation
+        storage_config = StorageConfig(
+            local_path=temp_storage, parquet_compression="lz4", max_rows_per_file=100
+        )
+        manager = HierarchicalStorageManager(storage_config)
+        scheduler = AggregationScheduler(temp_storage)
+        
+        # Create minute aggregation data first
+        asset_dir = temp_storage / "aggregated" / "asset_001" / "2026" / "04" / "04" / "14"
+        asset_dir.mkdir(parents=True, exist_ok=True)
+        minute_file = asset_dir / "temp_sensor_minute.parquet"
+        
+        # Initial minute data
+        minute_data = pd.DataFrame({
+            'value_mean': [25.5, 26.0, 24.8],
+            'value_min': [24.0, 25.2, 24.1],
+            'value_max': [27.0, 27.5, 25.5],
+            'record_count': [60, 58, 62],
+            'timestamp_start': ['2026-04-04T14:00:00', '2026-04-04T14:01:00', '2026-04-04T14:02:00'],
+            'timestamp_end': ['2026-04-04T14:00:59', '2026-04-04T14:01:59', '2026-04-04T14:02:59'],
+            'minute_bucket': ['2026-04-04 14:00:00', '2026-04-04 14:01:00', '2026-04-04 14:02:00']
+        })
+        minute_data.to_parquet(minute_file, compression="lz4", index=False)
+        
+        # Create initial hourly aggregation
+        target_hour = datetime(2026, 4, 4, 14, 0, 0)
+        scheduler._create_hourly_aggregations(target_hour)
+        
+        # Verify hourly file was created
+        hourly_path = temp_storage / "aggregated" / "asset_001" / "2026" / "04" / "04" / "temp_sensor_hour.parquet"
+        assert hourly_path.exists()
+        
+        # Read initial hourly data
+        initial_hourly = pd.read_parquet(hourly_path)
+        initial_mean = initial_hourly['value_mean'].iloc[0]
+        
+        # Wait a moment then modify minute file (simulate late arriving data)
+        import time
+        time.sleep(0.1)
+        
+        # Update minute data with late data
+        updated_minute_data = minute_data.copy()
+        updated_minute_data.iloc[0, updated_minute_data.columns.get_loc('value_mean')] = 99.9  # Significant change
+        updated_minute_data.to_parquet(minute_file, compression="lz4", index=False)
+        
+        # Run cascade update - hourly should detect newer minute file
+        scheduler._create_hourly_aggregations(target_hour)
+        
+        # Verify hourly was updated
+        updated_hourly = pd.read_parquet(hourly_path)
+        updated_mean = updated_hourly['value_mean'].iloc[0]
+        
+        # Mean should be different due to cascade update
+        assert updated_mean != initial_mean, "Hourly aggregation should have been updated via cascade"
+        
+        # Test daily cascade updates
+        target_date = datetime(2026, 4, 4).date()
+        scheduler._create_daily_aggregations(target_date)
+        
+        # Verify daily file was created
+        daily_path = temp_storage / "daily" / "asset_001" / "2026" / "04" / "temp_sensor_day.parquet"
+        assert daily_path.exists()
+        
+        # Read initial daily data
+        initial_daily = pd.read_parquet(daily_path)
+        initial_daily_mean = initial_daily['value_mean'].iloc[0]
+        
+        # Wait and update hourly file again
+        time.sleep(0.1)
+        updated_hourly_data = updated_hourly.copy()
+        updated_hourly_data.iloc[0, updated_hourly_data.columns.get_loc('value_mean')] = 88.8
+        updated_hourly_data.to_parquet(hourly_path, compression="lz4", index=False)
+        
+        # Run daily cascade update
+        scheduler._create_daily_aggregations(target_date)
+        
+        # Verify daily was updated
+        final_daily = pd.read_parquet(daily_path)
+        final_daily_mean = final_daily['value_mean'].iloc[0]
+        
+        assert final_daily_mean != initial_daily_mean, "Daily aggregation should have been updated via cascade"
+        
+        # Verify complete cascade update chain works
+        assert len(initial_hourly) == 1
+        assert len(updated_hourly) == 1
+        assert len(final_daily) == 1

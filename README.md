@@ -8,6 +8,7 @@ A high-performance, optimized microservice for consuming sensor data from Kafka,
 - **Real-time Kafka Consumer**: Subscribes to sensor data topics using regex patterns with intelligent timestamp parsing
 - **Optimized Storage**: Hierarchical organization with 80% reduction in file size through path-based metadata
 - **Multi-level Aggregations**: Real-time minute, scheduled hourly, and daily aggregations with quality metrics
+- **Cascade Updates**: File modification time-based automatic re-aggregation for late-arriving data
 - **Data Quality Monitoring**: Comprehensive metrics tracking completeness, gaps, and statistical confidence
 
 ### Cloud Integration & Reliability  
@@ -298,9 +299,10 @@ python -c "from azure.storage.blob import BlobServiceClient;
 ```
 
 **Data Quality Issues**
-- Check timestamp parsing with debug logging
-- Verify sensor data format matches expected schema
-- Use verification script to identify data gaps
+- Check timestamp parsing with debug logging - all timestamps stored as UTC without timezone suffixes
+- Verify sensor data format matches expected schema and TimescaleDB compatibility
+- Use verification script to identify data gaps and timestamp format issues
+- Ensure TimescaleDB timestamps match Parquet file format (both use clean UTC format like `2026-04-04T08:39:00`)
 
 **High Memory Usage**
 - Reduce `MAX_ROWS_PER_FILE`
@@ -371,13 +373,19 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) file for
 
 ## 🔄 Changelog
 
+### v2.1.0 (2026-04-05) - Cascade Updates & Enhanced Testing
+- **Cascade Update System**: File modification time-based automatic re-aggregation for late-arriving data
+- **Comprehensive Test Suite**: 13 new unit tests for aggregation functionality and integration tests for cascade updates
+- **Late Data Strategy**: Simple extended retention approach with automatic propagation through aggregation levels
+- **Self-Healing Aggregations**: Ensures eventual consistency across minute, hourly, and daily aggregations
+
 ### v2.0.0 (2026-04-04) - Major Storage Optimization
 - **80% Storage Reduction**: Optimized schema with path-based metadata
 - **Enhanced Azure Support**: SAS token authentication with automatic retry
 - **Data Quality Monitoring**: Comprehensive metrics across all aggregation levels
 - **Improved Aggregations**: Enhanced minute/hourly/daily with quality metrics
 - **Debug Tools**: Parquet file verification script with detailed analysis
-- **Smart Timestamp Parsing**: Handles Unix timestamps (ms/seconds) and ISO formats
+- **TimescaleDB-Compatible Timestamps**: UTC timestamps without timezone suffixes, matching TimescaleDB format
 - **Configurable Upload Intervals**: Adjustable upload frequency for testing/production
 
 ### v1.0.0 (2024-01-01) - Initial Release
