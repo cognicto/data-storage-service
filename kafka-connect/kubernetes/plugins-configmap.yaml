@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-connect-plugins
+  namespace: default
+data:
+  # This ConfigMap is a placeholder for small plugin files
+  # For larger JAR files, use an init container or persistent volume
+  
+  # Example: If you have small configuration files for plugins
+  plugin-config.properties: |
+    # Plugin specific configuration
+    connector.version=1.0.0
+    
+  # Download script for TimescaleDB JDBC connector
+  download-connectors.sh: |
+    #!/bin/bash
+    set -e
+    
+    # Create plugin directory
+    mkdir -p /opt/connectors/timescaledb
+    
+    # Download Confluent JDBC connector
+    echo "Downloading Confluent JDBC connector..."
+    curl -L https://d1i4a15mxbxib1.cloudfront.net/api/plugins/confluentinc/kafka-connect-jdbc/versions/10.7.4/confluentinc-kafka-connect-jdbc-10.7.4.zip \
+         -o /tmp/jdbc-connector.zip
+    
+    # Extract JDBC connector
+    unzip -q /tmp/jdbc-connector.zip -d /tmp/
+    cp -r /tmp/confluentinc-kafka-connect-jdbc-*/lib/* /opt/connectors/timescaledb/
+    
+    # Download PostgreSQL JDBC driver
+    echo "Downloading PostgreSQL JDBC driver..."
+    curl -L https://jdbc.postgresql.org/download/postgresql-42.6.0.jar \
+         -o /opt/connectors/timescaledb/postgresql-42.6.0.jar
+    
+    echo "Connector plugins downloaded successfully!"
+    ls -la /opt/connectors/timescaledb/

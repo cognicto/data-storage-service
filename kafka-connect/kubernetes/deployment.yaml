@@ -1,0 +1,153 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-connect
+  namespace: default
+  labels:
+    app: kafka-connect
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-connect
+  template:
+    metadata:
+      labels:
+        app: kafka-connect
+    spec:
+      containers:
+      - name: kafka-connect
+        image: confluentinc/cp-kafka-connect:7.4.0
+        ports:
+        - name: rest-api
+          containerPort: 8083
+        env:
+        - name: CONNECT_BOOTSTRAP_SERVERS
+          value: "kafka-broker-pod0:9092,kafka-broker-pod1:9092,kafka-broker-pod2:9092"
+        - name: CONNECT_REST_ADVERTISED_HOST_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: CONNECT_REST_PORT
+          value: "8083"
+        - name: CONNECT_GROUP_ID
+          value: "kafka-connect-cluster"
+        - name: CONNECT_CONFIG_STORAGE_TOPIC
+          value: "kafka-connect-configs"
+        - name: CONNECT_OFFSET_STORAGE_TOPIC
+          value: "kafka-connect-offsets"
+        - name: CONNECT_STATUS_STORAGE_TOPIC
+          value: "kafka-connect-status"
+        - name: CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR
+          value: "3"
+        - name: CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR
+          value: "3"
+        - name: CONNECT_STATUS_STORAGE_REPLICATION_FACTOR
+          value: "3"
+        - name: CONNECT_KEY_CONVERTER
+          value: "org.apache.kafka.connect.storage.StringConverter"
+        - name: CONNECT_VALUE_CONVERTER
+          value: "org.apache.kafka.connect.json.JsonConverter"
+        - name: CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE
+          value: "false"
+        - name: CONNECT_INTERNAL_KEY_CONVERTER
+          value: "org.apache.kafka.connect.json.JsonConverter"
+        - name: CONNECT_INTERNAL_VALUE_CONVERTER
+          value: "org.apache.kafka.connect.json.JsonConverter"
+        - name: CONNECT_INTERNAL_KEY_CONVERTER_SCHEMAS_ENABLE
+          value: "false"
+        - name: CONNECT_INTERNAL_VALUE_CONVERTER_SCHEMAS_ENABLE
+          value: "false"
+        - name: CONNECT_PLUGIN_PATH
+          value: "/usr/share/java,/usr/share/confluent-hub-components,/opt/connectors"
+        - name: CONNECT_LOG4J_ROOT_LOGLEVEL
+          value: "INFO"
+        - name: CONNECT_LOG4J_LOGGERS
+          value: "org.apache.kafka.connect.runtime.rest=WARN,org.reflections=ERROR"
+        # TimescaleDB connection environment variables
+        - name: TIMESCALEDB_HOST
+          value: "your-timescaledb-host"  # Update this
+        - name: TIMESCALEDB_PORT
+          value: "5432"
+        - name: TIMESCALEDB_DATABASE
+          value: "your_database"  # Update this
+        - name: TIMESCALEDB_USER
+          valueFrom:
+            secretRef:
+              name: timescaledb-secret
+              key: username
+        - name: TIMESCALEDB_PASSWORD
+          valueFrom:
+            secretRef:
+              name: timescaledb-secret
+              key: password
+        volumeMounts:
+        - name: config
+          mountPath: /opt/kafka-connect/config
+          readOnly: true
+        - name: plugins
+          mountPath: /opt/connectors
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8083
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /connectors
+            port: 8083
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+      volumes:
+      - name: config
+        configMap:
+          name: kafka-connect-config
+      - name: plugins
+        configMap:
+          name: kafka-connect-plugins
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-connect
+  namespace: default
+  labels:
+    app: kafka-connect
+spec:
+  type: ClusterIP
+  ports:
+  - name: rest-api
+    port: 8083
+    targetPort: 8083
+  selector:
+    app: kafka-connect
+---
+# Optional: NodePort service for external access
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-connect-external
+  namespace: default
+  labels:
+    app: kafka-connect
+spec:
+  type: NodePort
+  ports:
+  - name: rest-api
+    port: 8083
+    targetPort: 8083
+    nodePort: 30083  # Access from outside cluster on port 30083
+  selector:
+    app: kafka-connect

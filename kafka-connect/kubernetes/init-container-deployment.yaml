@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-connect-with-init
+  namespace: default
+  labels:
+    app: kafka-connect
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-connect
+  template:
+    metadata:
+      labels:
+        app: kafka-connect
+    spec:
+      # Init container to download connector plugins
+      initContainers:
+      - name: download-connectors
+        image: curlimages/curl:8.1.0
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          set -e
+          echo "Creating plugin directories..."
+          mkdir -p /opt/connectors/timescaledb
+          
+          echo "Downloading Confluent JDBC connector..."
+          curl -L https://d1i4a15mxbxib1.cloudfront.net/api/plugins/confluentinc/kafka-connect-jdbc/versions/10.7.4/confluentinc-kafka-connect-jdbc-10.7.4.zip \
+               -o /tmp/jdbc-connector.zip
+          
+          echo "Extracting JDBC connector..."
+          unzip -q /tmp/jdbc-connector.zip -d /tmp/
+          cp -r /tmp/confluentinc-kafka-connect-jdbc-*/lib/* /opt/connectors/timescaledb/
+          
+          echo "Downloading PostgreSQL JDBC driver..."
+          curl -L https://jdbc.postgresql.org/download/postgresql-42.6.0.jar \
+               -o /opt/connectors/timescaledb/postgresql-42.6.0.jar
+          
+          echo "Connector plugins downloaded successfully!"
+          ls -la /opt/connectors/timescaledb/
+        volumeMounts:
+        - name: plugins-volume
+          mountPath: /opt/connectors
+      containers:
+      - name: kafka-connect
+        image: confluentinc/cp-kafka-connect:7.4.0
+        ports:
+        - name: rest-api
+          containerPort: 8083
+        env:
+        - name: CONNECT_BOOTSTRAP_SERVERS
+          value: "kafka-broker-pod0:9092,kafka-broker-pod1:9092,kafka-broker-pod2:9092"
+        - name: CONNECT_REST_ADVERTISED_HOST_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: CONNECT_REST_PORT
+          value: "8083"
+        - name: CONNECT_GROUP_ID
+          value: "kafka-connect-cluster"
+        - name: CONNECT_CONFIG_STORAGE_TOPIC
+          value: "kafka-connect-configs"
+        - name: CONNECT_OFFSET_STORAGE_TOPIC
+          value: "kafka-connect-offsets"
+        - name: CONNECT_STATUS_STORAGE_TOPIC
+          value: "kafka-connect-status"
+        - name: CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR
+          value: "3"
+        - name: CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR
+          value: "3"
+        - name: CONNECT_STATUS_STORAGE_REPLICATION_FACTOR
+          value: "3"
+        - name: CONNECT_KEY_CONVERTER
+          value: "org.apache.kafka.connect.storage.StringConverter"
+        - name: CONNECT_VALUE_CONVERTER
+          value: "org.apache.kafka.connect.json.JsonConverter"
+        - name: CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE
+          value: "false"
+        - name: CONNECT_INTERNAL_KEY_CONVERTER
+          value: "org.apache.kafka.connect.json.JsonConverter"
+        - name: CONNECT_INTERNAL_VALUE_CONVERTER
+          value: "org.apache.kafka.connect.json.JsonConverter"
+        - name: CONNECT_INTERNAL_KEY_CONVERTER_SCHEMAS_ENABLE
+          value: "false"
+        - name: CONNECT_INTERNAL_VALUE_CONVERTER_SCHEMAS_ENABLE
+          value: "false"
+        - name: CONNECT_PLUGIN_PATH
+          value: "/usr/share/java,/usr/share/confluent-hub-components,/opt/connectors"
+        - name: CONNECT_LOG4J_ROOT_LOGLEVEL
+          value: "INFO"
+        - name: CONNECT_LOG4J_LOGGERS
+          value: "org.apache.kafka.connect.runtime.rest=WARN,org.reflections=ERROR"
+        volumeMounts:
+        - name: config
+          mountPath: /opt/kafka-connect/config
+          readOnly: true
+        - name: plugins-volume
+          mountPath: /opt/connectors
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8083
+          initialDelaySeconds: 90
+          periodSeconds: 30
+          timeoutSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /connectors
+            port: 8083
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+      volumes:
+      - name: config
+        configMap:
+          name: kafka-connect-config
+      - name: plugins-volume
+        emptyDir: {}
+      restartPolicy: Always
