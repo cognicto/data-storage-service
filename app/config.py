@@ -24,13 +24,23 @@ class KafkaConfig:
 
 @dataclass
 class AzureConfig:
-    """Azure Blob Storage configuration."""
+    """Azure Storage configuration (supports both Blob Storage and ADLS Gen2)."""
 
-    blob_endpoint: str  # Full blob endpoint URL
-    sas_token: str  # SAS token (with or without leading ?)
-    container_name: str
-    storage_account: str = ""  # Will be extracted from blob_endpoint
+    # Primary configuration options
+    connection_string: str = ""  # Full Azure connection string (recommended for ADLS Gen2)
+    file_system_name: str = ""  # ADLS Gen2 file system name (replaces container_name)
+    
+    # Legacy blob storage options (maintained for backward compatibility)
+    blob_endpoint: str = ""  # Full blob endpoint URL
+    sas_token: str = ""  # SAS token (with or without leading ?)
+    container_name: str = ""  # Blob container name
+    storage_account: str = ""  # Will be extracted from blob_endpoint or connection_string
     storage_key: str = ""  # Kept for backward compatibility
+    
+    # Storage type selection
+    use_adls_gen2: bool = True  # Default to ADLS Gen2, set False for legacy blob storage
+    
+    # Performance and retry settings
     max_retries: int = 3
     retry_delay: int = 1
     max_workers: int = 4
@@ -95,15 +105,21 @@ def load_config() -> AppConfig:
         max_poll_records=int(os.getenv("KAFKA_MAX_POLL_RECORDS", "500")),
     )
 
-    # Azure configuration
+    # Azure configuration - supports both ADLS Gen2 and legacy blob storage
     azure_config = AzureConfig(
+        # ADLS Gen2 configuration (primary)
+        connection_string=os.getenv("AZURE_CONNECTION_STRING", ""),
+        file_system_name=os.getenv("AZURE_FILE_SYSTEM_NAME", os.getenv("AZURE_CONTAINER_NAME", "sensor-data-cold-storage")),
+        use_adls_gen2=os.getenv("AZURE_USE_ADLS_GEN2", "true").lower() == "true",
+        
+        # Legacy blob storage configuration (backward compatibility)
         blob_endpoint=os.getenv("AZURE_BLOB_ENDPOINT", ""),
         sas_token=os.getenv("AZURE_SAS_TOKEN", ""),
         container_name=os.getenv("AZURE_CONTAINER_NAME", "sensor-data-cold-storage"),
-        storage_account=os.getenv(
-            "AZURE_STORAGE_ACCOUNT", ""
-        ),  # For backward compatibility
-        storage_key=os.getenv("AZURE_STORAGE_KEY", ""),  # For backward compatibility
+        storage_account=os.getenv("AZURE_STORAGE_ACCOUNT", ""),
+        storage_key=os.getenv("AZURE_STORAGE_KEY", ""),
+        
+        # Performance settings
         max_retries=int(os.getenv("AZURE_MAX_RETRIES", "3")),
         retry_delay=int(os.getenv("AZURE_RETRY_DELAY", "1")),
         max_workers=int(os.getenv("AZURE_MAX_WORKERS", "4")),
@@ -167,21 +183,37 @@ def validate_config(config: AppConfig) -> bool:
     if not config.kafka.topic_pattern:
         errors.append("KAFKA_TOPIC_PATTERN is required")
 
-    # Validate Azure config - support both authentication methods
+    # Validate Azure config - support ADLS Gen2, blob storage, and legacy methods
+    has_connection_string = bool(config.azure.connection_string)
     has_storage_account_auth = config.azure.storage_account and config.azure.storage_key
     has_sas_token_auth = config.azure.blob_endpoint and config.azure.sas_token
 
-    # If any Azure config is provided, ensure it's complete
-    if (
-        config.azure.storage_account
+    # Check if any Azure configuration is provided
+    azure_config_provided = (
+        config.azure.connection_string
+        or config.azure.storage_account
         or config.azure.storage_key
         or config.azure.blob_endpoint
         or config.azure.sas_token
-    ):
-        if not has_storage_account_auth and not has_sas_token_auth:
-            errors.append(
-                "Azure authentication requires either (AZURE_STORAGE_ACCOUNT + AZURE_STORAGE_KEY) or (AZURE_BLOB_ENDPOINT + AZURE_SAS_TOKEN)"
-            )
+    )
+
+    if azure_config_provided:
+        # Validate ADLS Gen2 configuration
+        if config.azure.use_adls_gen2:
+            if not has_connection_string:
+                errors.append(
+                    "ADLS Gen2 requires AZURE_CONNECTION_STRING to be set"
+                )
+            if not config.azure.file_system_name:
+                errors.append(
+                    "ADLS Gen2 requires AZURE_FILE_SYSTEM_NAME to be set"
+                )
+        else:
+            # Validate legacy blob storage configuration
+            if not has_storage_account_auth and not has_sas_token_auth:
+                errors.append(
+                    "Blob Storage authentication requires either (AZURE_STORAGE_ACCOUNT + AZURE_STORAGE_KEY) or (AZURE_BLOB_ENDPOINT + AZURE_SAS_TOKEN)"
+                )
 
     # Validate storage path
     if not config.storage.local_path:

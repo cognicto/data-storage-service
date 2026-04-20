@@ -9,6 +9,7 @@ confluent-kafka==2.3.0
 
 # Azure Storage
 azure-storage-blob==12.19.0
+azure-storage-file-datalake==12.21.0
 azure-core==1.29.5
 
 # Data Processing

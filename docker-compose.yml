@@ -14,7 +14,12 @@ services:
       - KAFKA_TOPIC_PATTERN=${KAFKA_TOPIC_PATTERN:-^sensor-data-quad.*}
       - KAFKA_CONSUMER_GROUP=${KAFKA_CONSUMER_GROUP:-sensor-storage-service}
       
-      # Azure Configuration
+      # Azure Configuration (ADLS Gen2 and legacy options)
+      - AZURE_CONNECTION_STRING=${AZURE_CONNECTION_STRING}
+      - AZURE_FILE_SYSTEM_NAME=${AZURE_FILE_SYSTEM_NAME:-sensor-data-cold-storage}
+      - AZURE_USE_ADLS_GEN2=${AZURE_USE_ADLS_GEN2:-true}
+      
+      # Legacy Azure Configuration (backward compatibility)
       - AZURE_STORAGE_ACCOUNT=${AZURE_STORAGE_ACCOUNT}
       - AZURE_STORAGE_KEY=${AZURE_STORAGE_KEY}
       - AZURE_CONTAINER_NAME=${AZURE_CONTAINER_NAME:-sensor-data-cold-storage}

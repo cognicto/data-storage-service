@@ -211,19 +211,26 @@ def create_app() -> FastAPI:
 
     @app.get("/azure/files")
     async def list_azure_files(prefix: Optional[str] = None) -> Dict:
-        """List files in Azure Blob Storage."""
+        """List files in Azure Storage (Blob Storage or ADLS Gen2)."""
         try:
             if not azure_uploader:
                 raise HTTPException(
                     status_code=503, detail="Azure uploader not available"
                 )
 
-            files = azure_uploader.list_azure_files(prefix or "")
+            # Check if uploader has the ADLS Gen2 method or the legacy blob method
+            if hasattr(azure_uploader, 'list_adls_files'):
+                files = azure_uploader.list_adls_files(prefix or "")
+                storage_type = "ADLS Gen2"
+            else:
+                files = azure_uploader.list_azure_files(prefix or "")
+                storage_type = "Blob Storage"
 
             return {
                 "files": files,
                 "count": len(files),
                 "total_size_mb": sum(f["size_mb"] for f in files),
+                "storage_type": storage_type,
             }
 
         except Exception as e:

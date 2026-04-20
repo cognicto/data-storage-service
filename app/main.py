@@ -20,6 +20,7 @@ load_dotenv()
 from app.aggregation.scheduler import AggregationScheduler
 from app.api.routes import create_app, set_service_references
 from app.azure.uploader import AzureBlobUploader
+from app.azure.adls_uploader import AzureDataLakeUploader
 from app.cleanup.service import FileCleanupService
 from app.config import load_config, validate_config
 from app.kafka.consumer import SensorDataConsumer
@@ -71,11 +72,18 @@ class SensorDataStorageService:
             logger.info("Initializing storage manager...")
             self.storage_manager = HierarchicalStorageManager(self.config.storage)
 
-            # Initialize Azure uploader
+            # Initialize Azure uploader based on configuration
             logger.info("Initializing Azure uploader...")
-            self.azure_uploader = AzureBlobUploader(
-                self.config.azure, self.config.storage.local_path
-            )
+            if self.config.azure.use_adls_gen2:
+                logger.info("Using ADLS Gen2 uploader")
+                self.azure_uploader = AzureDataLakeUploader(
+                    self.config.azure, self.config.storage.local_path
+                )
+            else:
+                logger.info("Using legacy Blob Storage uploader")
+                self.azure_uploader = AzureBlobUploader(
+                    self.config.azure, self.config.storage.local_path
+                )
 
             # Initialize cleanup service
             logger.info("Initializing cleanup service...")
@@ -252,7 +260,12 @@ class SensorDataStorageService:
             logger.info("Sensor Data Storage Service started successfully")
             logger.info(f"  - Kafka topics: {self.config.kafka.topic_pattern}")
             logger.info(f"  - Local storage: {self.config.storage.local_path}")
-            logger.info(f"  - Azure container: {self.config.azure.container_name}")
+            if self.config.azure.use_adls_gen2:
+                logger.info(f"  - ADLS Gen2 file system: {self.config.azure.file_system_name}")
+                logger.info("  - Using Azure Data Lake Storage Gen2")
+            else:
+                logger.info(f"  - Azure container: {self.config.azure.container_name}")
+                logger.info("  - Using Azure Blob Storage (legacy)")
             logger.info(f"  - Cleanup enabled: {self.config.cleanup.enabled}")
             logger.info(
                 f"  - API endpoint: http://{self.config.service.host}:{self.config.service.port}"

@@ -139,21 +139,62 @@ The service exposes a FastAPI-based REST API on port 8080:
 
 API documentation is automatically available at `/docs` (Swagger UI).
 
-## Azure Authentication
+## Azure Storage Configuration
 
-The service supports multiple Azure authentication methods:
+The service supports both **Azure Data Lake Storage Gen2 (ADLS Gen2)** and legacy **Azure Blob Storage**.
 
-### SAS Token Authentication (Recommended)
+### ADLS Gen2 Authentication (Recommended)
+
+For optimal performance and modern data lake capabilities, use ADLS Gen2 with connection string authentication:
+
+```bash
+# Primary ADLS Gen2 Configuration
+AZURE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=sensedatalaketest;AccountKey=your_account_key;EndpointSuffix=core.windows.net"
+AZURE_FILE_SYSTEM_NAME=sensor-data-cold-storage
+AZURE_USE_ADLS_GEN2=true
+```
+
+**Benefits of ADLS Gen2:**
+- Hierarchical file system with directory operations
+- Better performance for analytics workloads
+- POSIX-compliant access control lists (ACLs)
+- Optimized for big data scenarios
+- Compatible with both file system and object storage APIs
+
+### Legacy Blob Storage Authentication
+
+For backward compatibility, legacy blob storage is still supported:
+
+#### SAS Token Authentication
 ```bash
 AZURE_BLOB_ENDPOINT=https://yourstorageaccount.blob.core.windows.net
 AZURE_SAS_TOKEN=sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupyx&se=2024-12-31T23:59:59Z...
+AZURE_USE_ADLS_GEN2=false
 ```
 
-### Storage Account Key Authentication (Legacy)
+#### Storage Account Key Authentication
 ```bash
 AZURE_STORAGE_ACCOUNT=yourstorageaccount
 AZURE_STORAGE_KEY=your_storage_key
+AZURE_USE_ADLS_GEN2=false
 ```
+
+### Migration from Blob Storage to ADLS Gen2
+
+To migrate existing deployments:
+
+1. **Enable hierarchical namespace** on your Azure Storage Account (converts it to ADLS Gen2)
+2. **Update environment variables** to use ADLS Gen2 configuration:
+   ```bash
+   # Replace blob storage config with:
+   AZURE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=youraccount;AccountKey=yourkey;EndpointSuffix=core.windows.net"
+   AZURE_FILE_SYSTEM_NAME=your-container-name  # Same as previous container name
+   AZURE_USE_ADLS_GEN2=true
+   ```
+3. **Restart the service** - existing data will be accessible via the new ADLS Gen2 interface
+4. **Verify operation** using the `/azure/files` API endpoint
+
+**Note:** ADLS Gen2 maintains full backward compatibility with Blob Storage APIs, so existing data remains accessible.
 
 ## Data Quality & Aggregations
 
