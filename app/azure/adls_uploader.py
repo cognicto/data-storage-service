@@ -36,6 +36,10 @@ class AzureDataLakeUploader:
         # Initialize ADLS Gen2 connection using connection string
         if config.connection_string:
             try:
+                # Validate connection string format
+                if not self._validate_connection_string(config.connection_string):
+                    raise ValueError("Invalid connection string format")
+                
                 self.datalake_service_client = DataLakeServiceClient.from_connection_string(
                     config.connection_string
                 )
@@ -55,6 +59,10 @@ class AzureDataLakeUploader:
                 # Ensure file system exists
                 self._ensure_file_system_exists()
                 
+            except ValueError as e:
+                logger.error(f"Invalid ADLS Gen2 connection string: {e}")
+                self.datalake_service_client = None
+                self.file_system_client = None
             except Exception as e:
                 logger.error(f"Failed to connect to ADLS Gen2: {e}")
                 self.datalake_service_client = None
@@ -75,6 +83,42 @@ class AzureDataLakeUploader:
             "total_bytes": 0,
             "last_upload_time": None,
         }
+
+    def _validate_connection_string(self, connection_string: str) -> bool:
+        """Validate ADLS Gen2 connection string format."""
+        required_parts = [
+            "DefaultEndpointsProtocol=https",
+            "AccountName=",
+            "AccountKey=",
+            "EndpointSuffix=core.windows.net"
+        ]
+        
+        # Check for common typos in your connection string format
+        if "DefaultEndpoimtProtocol" in connection_string:
+            logger.error("Connection string contains typo: 'DefaultEndpoimtProtocol' should be 'DefaultEndpointsProtocol'")
+            return False
+        
+        if "AccontKey" in connection_string:
+            logger.error("Connection string contains typo: 'AccontKey' should be 'AccountKey'")
+            return False
+            
+        # Validate all required parts are present
+        for part in required_parts:
+            if part not in connection_string:
+                logger.error(f"Connection string missing required part: {part}")
+                return False
+        
+        # Validate AccountName matches expected value
+        account_match = re.search(r"AccountName=([^;]+)", connection_string)
+        if account_match and account_match.group(1) == "sensedatalaketest":
+            logger.info("Connection string validation passed for sensedatalaketest account")
+            return True
+        elif account_match:
+            logger.info(f"Connection string validation passed for account: {account_match.group(1)}")
+            return True
+        else:
+            logger.error("Could not extract AccountName from connection string")
+            return False
 
     def _extract_storage_account_name(self):
         """Extract storage account name from connection string."""
@@ -199,14 +243,25 @@ class AzureDataLakeUploader:
             last_error = None
             for attempt in range(self.config.max_retries):
                 try:
+                    file_size = local_file.stat().st_size
+                    
                     with open(local_file, "rb") as data:
-                        # Create file and upload data
-                        file_client.create_file()
-                        file_client.upload_data(
-                            data, 
-                            overwrite=True,
-                            max_concurrency=self.config.max_workers
-                        )
+                        # For large files (>100MB), use chunked upload for better performance
+                        if file_size > 100 * 1024 * 1024:  # 100MB threshold
+                            logger.debug(f"Using chunked upload for large file: {local_file.name} ({file_size / (1024*1024):.1f} MB)")
+                            file_client.upload_data(
+                                data,
+                                overwrite=True,
+                                max_concurrency=self.config.max_workers,
+                                chunk_size=self.config.chunk_size  # Use configured chunk size
+                            )
+                        else:
+                            # For smaller files, use simple upload
+                            file_client.upload_data(
+                                data, 
+                                overwrite=True,
+                                max_concurrency=self.config.max_workers
+                            )
 
                     # Verify upload succeeded
                     if file_client.exists():
